@@ -683,7 +683,10 @@ def main():
 
     try:
         label, bars, prewarm = load_bars(code, exchange, freq, sdt, edt)
-        c = cb.CZSC(bars, max_bi_num=50, min_bi_len=6)
+        # max_bi_num 动态放大：避免长周期下早期笔被裁剪导致分析不完整
+        # （Rust 默认 50 为控内存，批量分析时应覆盖全部区间）
+        max_bi_num = max(200, len(bars))
+        c = cb.CZSC(bars, max_bi_num=max_bi_num, min_bi_len=6)
         print_report(label, freq, sdt, edt, bars, prewarm, c)
 
         want_html = True
