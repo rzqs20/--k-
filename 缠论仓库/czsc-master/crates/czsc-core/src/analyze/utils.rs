@@ -27,26 +27,122 @@ pub struct GapInfo {
     pub delta: f64,
 }
 
-/// 将连续笔划分为中枢序列。
+/// 将连续笔划分为中枢序列（改进版：a+A+b+B+c 标准结构）。
+///
+/// 核心规则：
+/// 1. 中枢本体由连续 3 笔价格重叠区构成，区间 [zd, zg] = [max(3笔低点), min(3笔高点)]。
+/// 2. 中枢终结需同时满足：离开笔（完全脱离区间）+ 回踩笔（不回到区间，即三买/三卖确认）。
+/// 3. 离开笔 + 回踩笔构成连接段，不属于任何中枢本体；旧中枢结束时间不含离开笔。
+/// 4. 回踩笔重新进入中枢区间 → 判定为延伸/扩展，离开笔与回踩笔均纳入旧中枢，不新建中枢。
+/// 5. 新中枢第一笔从三买/三卖确认之后的第一笔开始滑窗寻找。
+/// 6. 纸片中枢过滤：区间宽度 (zg - zd) 小于环境变量 CZSC_ZS_MIN_WIDTH 的中枢不纳入（默认 0.0 不过滤）。
 pub fn get_zs_seq(bis: &[BI]) -> Vec<ZS> {
-    let mut zs_list = Vec::new();
-    for bi in bis.iter().cloned() {
-        let Some(last_zs) = zs_list.pop() else {
-            zs_list.push(ZS::new(vec![bi]));
-            continue;
-        };
+    #[derive(PartialEq)]
+    enum State {
+        /// 寻找新中枢：滑窗检查最后 3 笔是否有价格重叠
+        LookingForZS,
+        /// 中枢存续中：重叠笔纳入，脱离笔进入等待回踩
+        ActiveZS,
+        /// 已出现离开笔，等待下一笔回踩确认（三买/三卖）或重新进入（延伸）
+        WaitingForPullback,
+    }
 
-        if (bi.direction == Direction::Up && bi.get_high() < last_zs.zd)
-            || (bi.direction == Direction::Down && bi.get_low() > last_zs.zg)
-        {
-            zs_list.push(last_zs);
-            zs_list.push(ZS::new(vec![bi]));
-        } else {
-            let mut new_bis = last_zs.bis;
-            new_bis.push(bi);
-            zs_list.push(ZS::new(new_bis));
+    let min_width: f64 = std::env::var("CZSC_ZS_MIN_WIDTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+
+    let mut zs_list = Vec::new();
+    let mut state = State::LookingForZS;
+    let mut candidate_bis: Vec<BI> = Vec::new();
+    let mut active_bis: Vec<BI> = Vec::new();
+    // (离开笔, 是否向上脱离)：true=向上脱离(low>zg)，false=向下脱离(high<zd)
+    let mut exit_bi: Option<(BI, bool)> = None;
+
+    for bi in bis.iter().cloned() {
+        match state {
+            State::LookingForZS => {
+                candidate_bis.push(bi);
+                if candidate_bis.len() >= 3 {
+                    let n = candidate_bis.len();
+                    let last3 = &candidate_bis[n - 3..];
+                    let zd = last3
+                        .iter()
+                        .map(|b| b.get_low())
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    let zg = last3
+                        .iter()
+                        .map(|b| b.get_high())
+                        .fold(f64::INFINITY, f64::min);
+                    if zd < zg {
+                        // 找到 3 笔重叠 → 新中枢本体开始（前 3 笔为中枢首段）
+                        active_bis = candidate_bis[n - 3..].to_vec();
+                        candidate_bis.clear();
+                        state = State::ActiveZS;
+                    }
+                }
+            }
+
+            State::ActiveZS => {
+                let zs = ZS::new(active_bis.clone());
+                // 离开笔判定：价格区间与中枢 [zd, zg] 完全无交集
+                // 向上脱离：低点 > zg（完全在中枢上方）
+                // 向下脱离：高点 < zd（完全在中枢下方）
+                let break_up = bi.get_low() > zs.zg;
+                let break_down = bi.get_high() < zs.zd;
+                let detached = break_up || break_down;
+
+                if detached {
+                    exit_bi = Some((bi, break_up));
+                    state = State::WaitingForPullback;
+                } else {
+                    active_bis.push(bi);
+                }
+            }
+
+            State::WaitingForPullback => {
+                let (exit, break_up) = exit_bi.take().unwrap();
+                let zs = ZS::new(active_bis.clone());
+
+                // 三买/三卖确认：
+                // 向上脱离后 → 三买：回踩笔低点 > zg（不回到中枢区间）
+                // 向下脱离后 → 三卖：回踩笔高点 < zd（不回到中枢区间）
+                let confirmed = if break_up {
+                    bi.get_low() > zs.zg
+                } else {
+                    bi.get_high() < zs.zd
+                };
+
+                if confirmed {
+                    // 三买/三卖确认 → 旧中枢本体正式终结。
+                    // 结束时间 = 中枢最后一笔重叠笔的结束时间（不含离开笔）。
+                    let final_zs = ZS::new(active_bis.clone());
+                    if final_zs.zg - final_zs.zd >= min_width {
+                        zs_list.push(final_zs);
+                    }
+                    active_bis.clear();
+                    // 连接段 = [离开笔, 回踩笔]，均不属于任何中枢本体。
+                    // 新中枢从回踩笔之后的笔开始滑窗寻找。
+                    candidate_bis.clear();
+                    state = State::LookingForZS;
+                } else {
+                    // 回踩笔重新进入中枢区间 → 延伸/扩展，不新建同级别中枢。
+                    active_bis.push(exit);
+                    active_bis.push(bi);
+                    state = State::ActiveZS;
+                }
+            }
         }
     }
+
+    // 收尾：最后一个仍存续的活跃中枢（尚未出现离开笔或回踩未确认）也输出。
+    if !active_bis.is_empty() {
+        let final_zs = ZS::new(active_bis);
+        if final_zs.zg - final_zs.zd >= min_width {
+            zs_list.push(final_zs);
+        }
+    }
+
     zs_list
 }
 
