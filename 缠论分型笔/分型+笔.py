@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-缠论 · 分型与笔 —— 纯 Python 移植
-==================================
-逻辑同步自 GitHub 仓库 czsc-master（Rust 版 czsc-core），只包含：
-    原始K线 → 去包含关系(NewBar) → 分型(FX) → 笔(BI) 的完整算法。
+缠论 · 分型与笔/线段 —— 纯 Python 移植
+=====================================
+逻辑同步自 GitHub 仓库 czsc-master（Rust 版 czsc-core），包含：
+    原始K线 → 去包含关系(NewBar) → 分型(FX) → 笔(BI) → 线段(Segment)。
+
+其中「分型/笔」严格对齐 Rust 版 czsc-core；
+「线段」为自定义实现：把笔按「同向笔极值递推」连成线段，连续覆盖、无空档——
+  线段起点固定为起始笔的起点，向后扫描：反向笔跳过，
+  同向笔创新高/新低则延伸，不创新高/新低则线段结束于最后一个创新极值的同向笔；
+  线段结束后从终点笔的下一笔立即开始反方向线段（首尾相接，无空档）；
+  至少 1 笔即可成段，延伸到数据末尾的线段标记为未完成。
 
 按需求，刻意【不】包含：中枢(ZS)、买卖点、背驰、趋势判断等后续环节。
 
@@ -19,12 +26,14 @@
     bars = bars_from_rows(rows, symbol="600000.SH", freq="日线")
     c = CZSC(bars, max_bi_num=50, min_bi_len=6)
 
-    for fx in c.fx_list:    # 全部分型（顶/底交替）
+    for fx in c.fx_list:      # 全部分型（顶/底交替）
         ...
-    for bi in c.bi_list:    # 已完成笔
+    for bi in c.bi_list:      # 已完成笔
         print(bi.direction, bi.start_dt, bi.end_dt, bi.get_high(), bi.get_low())
+    for seg in c.segments:    # 线段
+        print(seg.direction, seg.start_dt, seg.end_dt, seg.finished)
 
-运行内置自检（用仓库 Rust 测试数据对拍）：
+运行内置自检（用仓库 Rust 测试数据对拍 + 线段逻辑验证）：
     python chan_fx_bi.py
 """
 
@@ -36,8 +45,8 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 __all__ = [
-    "RawBar", "NewBar", "FX", "BI",
-    "remove_include", "check_fx", "check_fxs", "check_bi",
+    "RawBar", "NewBar", "FX", "BI", "Segment",
+    "remove_include", "check_fx", "check_fxs", "check_bi", "check_segments",
     "CZSC", "bars_from_rows",
 ]
 
@@ -161,6 +170,51 @@ class BI:
         return (f"BI(symbol={self.symbol}, sdt={self.start_dt:%Y-%m-%d %H:%M:%S}, "
                 f"edt={self.end_dt:%Y-%m-%d %H:%M:%S}, direction={self.direction}, "
                 f"high={self.get_high()}, low={self.get_low()})")
+
+
+@dataclass
+class Segment:
+    """线段（由 3 笔及以上构成，自定义实现）。
+    direction: 'Up' 向上线段 / 'Down' 向下线段
+    fx_a 为线段起点分型，fx_b 为线段终点分型，bis 为构成线段的笔列表。
+    finished: False 表示该线段为未完成段（尾部笔数不足以确认，仍在延伸）。"""
+    symbol: str
+    fx_a: FX
+    fx_b: FX
+    direction: str = ""
+    bis: List[BI] = field(default_factory=list)
+    finished: bool = True
+
+    @property
+    def start_dt(self) -> datetime:
+        return self.fx_a.dt
+
+    @property
+    def end_dt(self) -> datetime:
+        return self.fx_b.dt
+
+    def get_high(self) -> float:
+        """线段区间最高价（含延伸中的笔）"""
+        return max(b.get_high() for b in self.bis)
+
+    def get_low(self) -> float:
+        """线段区间最低价（含延伸中的笔）"""
+        return min(b.get_low() for b in self.bis)
+
+    def get_length(self) -> int:
+        """构成线段的笔数量"""
+        return len(self.bis)
+
+    def get_power(self) -> float:
+        """价差力度：|终点分型值 - 起点分型值|，保留2位小数"""
+        return round(abs(self.fx_b.fx - self.fx_a.fx), 2)
+
+    def __repr__(self) -> str:
+        state = "完成" if self.finished else "未完成"
+        return (f"Segment(symbol={self.symbol}, sdt={self.start_dt:%Y-%m-%d %H:%M:%S}, "
+                f"edt={self.end_dt:%Y-%m-%d %H:%M:%S}, direction={self.direction}, "
+                f"high={self.get_high()}, low={self.get_low()}, bis={len(self.bis)}, "
+                f"state={state})")
 
 
 # =====================================================================
@@ -297,6 +351,55 @@ def check_bi(bars: List[NewBar], min_bi_len: int = 6) -> Tuple[Optional[BI], Lis
     return None, bars
 
 
+def check_segments(bis: List[BI], min_bi_len: int = 1) -> List[Segment]:
+    """线段划分（自定义：同向笔极值递推，连续覆盖、无空档）。
+
+    规则（与用户确认的逻辑一致，线段连续延伸、不产生空档）：
+    - 从第一笔开始，其方向即线段方向；
+    - 线段起点固定为该起始笔的起点，向后扫描：反向笔跳过，
+      同向笔创新高/新低则延伸（更新线段终点），
+      一旦同向笔不创新高/新低，线段结束于最后一个创新极值的同向笔；
+    - 线段结束后，从终点笔的下一笔立即开始反方向线段（首尾相接，无空档）；
+    - 线段至少 1 笔即可成段（不要求 ≥3 笔，避免反向力度极弱时留空档）；
+    - 延伸到数据最后一笔的线段标记为未完成（finished=False，行情可能继续）。"""
+    segs: List[Segment] = []
+    n = len(bis)
+    idx = 0
+    while idx < n:
+        direction = bis[idx].direction
+        if direction == "Up":
+            extreme = bis[idx].get_high()
+            end = idx
+            j = idx + 1
+            while j < n:
+                if bis[j].direction == direction:
+                    if bis[j].get_high() > extreme:  # 严格创新高才延伸
+                        extreme = bis[j].get_high()
+                        end = j
+                    else:
+                        break  # 不创新高 → 线段结束
+                j += 1
+        else:
+            extreme = bis[idx].get_low()
+            end = idx
+            j = idx + 1
+            while j < n:
+                if bis[j].direction == direction:
+                    if bis[j].get_low() < extreme:  # 严格创新低才延伸
+                        extreme = bis[j].get_low()
+                        end = j
+                    else:
+                        break  # 不创新低 → 线段结束
+                j += 1
+
+        finished = end < n - 1  # 延伸到数据最后一笔的线段视为未完成
+        segs.append(Segment(symbol=bis[idx].symbol, fx_a=bis[idx].fx_a,
+                            fx_b=bis[end].fx_b, direction=direction,
+                            bis=list(bis[idx:end + 1]), finished=finished))
+        idx = end + 1
+    return segs
+
+
 # =====================================================================
 # 三、CZSC 分析器（逐K线增量更新，复刻 czsc-core analyze/mod.rs）
 # =====================================================================
@@ -359,6 +462,15 @@ class CZSC:
         if last.direction == "Up":
             return max(b.high for b in self.bars_ubi) > last.get_high()
         return min(b.low for b in self.bars_ubi) < last.get_low()
+
+    @property
+    def segments(self) -> List[Segment]:
+        """线段列表（基于当前 bi_list 现算，含未完成线段）"""
+        return check_segments(self.bi_list)
+
+    def get_finished_segments(self) -> List[Segment]:
+        """已确认完成的线段"""
+        return [s for s in self.segments if s.finished]
 
     # ---------------- 增量更新 ----------------
 
@@ -584,6 +696,69 @@ def _run_selftest() -> None:
         assert abs(fx.fx - val) < 1e-4, f"第{i}个分型 fx 不符"
 
     print("✓ 对拍通过：bi_list 4 笔、fx_list 12 个分型 与 Rust 测试期望完全一致")
+
+    # ---- 线段：真实数据（4笔 → 连续覆盖，2 个线段，无空档）----
+    # 笔：Up(45.47→51.74), Down(51.74→48.16), Up(48.16→50.73), Down(50.73→47.37)
+    # 线段1：Up 首笔创新高51.74后无更高向上笔 → 1笔线段；线段2：Down 3笔延伸至末尾
+    segs = c.segments
+    assert len(segs) == 2, f"002515 应得 2 个线段，实得 {len(segs)}"
+    s0, s1 = segs[0], segs[1]
+    assert s0.direction == "Up" and s0.get_length() == 1, "002515 首段应为 Up 1笔"
+    assert abs(s0.fx_a.fx - 45.47) < 1e-4 and abs(s0.fx_b.fx - 51.74) < 1e-4
+    assert s1.direction == "Down" and s1.get_length() == 3, "002515 次段应为 Down 3笔"
+    assert abs(s1.fx_a.fx - 51.74) < 1e-4 and abs(s1.fx_b.fx - 47.37) < 1e-4
+    assert not s1.finished, "002515 末段延伸至末尾应为未完成"
+    # 无空档校验：相邻线段首尾相接
+    assert s0.fx_b.dt == s1.fx_a.dt, "002515 相邻线段应首尾相接"
+
+    # ---- 线段：手动构造笔序列，验证核心递推逻辑 ----
+    # 高点：H0=2.0, H2=2.4, H4=2.6, H6=2.2(不创新高)
+    # 低点：L1=1.5, L3=1.8, L5=1.2, L7=0.9
+    bis_manual = [
+        _mk_bi("T", "Up", 1, 1.0, 2, 2.0),     # b0 Up
+        _mk_bi("T", "Down", 2, 2.0, 3, 1.5),   # b1 Down
+        _mk_bi("T", "Up", 3, 1.5, 4, 2.4),     # b2 Up
+        _mk_bi("T", "Down", 4, 2.4, 5, 1.8),   # b3 Down
+        _mk_bi("T", "Up", 5, 1.8, 6, 2.6),     # b4 Up
+        _mk_bi("T", "Down", 6, 2.6, 7, 1.2),   # b5 Down
+        _mk_bi("T", "Up", 7, 1.2, 8, 2.2),     # b6 Up(不创新高2.2<2.6)
+        _mk_bi("T", "Down", 8, 2.2, 9, 0.9),   # b7 Down
+    ]
+    segs = check_segments(bis_manual)
+    assert len(segs) == 2, f"手动序列应得 2 个线段，实得 {len(segs)}"
+    # 线段1：向上 b0..b4（5笔，终点顶2.6）
+    s1 = segs[0]
+    assert s1.direction == "Up" and s1.finished and s1.get_length() == 5
+    assert abs(s1.fx_b.fx - 2.6) < 1e-4 and abs(s1.fx_a.fx - 1.0) < 1e-4
+    # 线段2：向下 b5..b7（3笔，终点底0.9，延伸到末尾 → 未完成）
+    s2 = segs[1]
+    assert s2.direction == "Down" and not s2.finished and s2.get_length() == 3
+    assert abs(s2.fx_b.fx - 0.9) < 1e-4 and abs(s2.fx_a.fx - 2.6) < 1e-4
+    # 无空档校验：相邻线段首尾相接
+    assert s1.fx_b.dt == s2.fx_a.dt, "手动序列相邻线段应首尾相接"
+
+    # ---- 线段：全部笔都被线段覆盖（无空档）----
+    bis_tail = bis_manual[:2]  # 只有2笔：Up + Down
+    segs = check_segments(bis_tail)
+    assert len(segs) == 2, f"2笔应连续覆盖为 2 个线段，实得 {len(segs)}"
+    assert segs[0].direction == "Up" and segs[0].get_length() == 1
+    assert segs[1].direction == "Down" and segs[1].get_length() == 1
+    assert segs[0].fx_b.dt == segs[1].fx_a.dt, "2笔场景相邻线段应首尾相接"
+
+    print("✓ 线段验证通过：创新高延伸 / 不创新高结束 / 连续覆盖无空档 / 首尾相接")
+
+
+def _mk_bi(symbol, direction, dt_a, val_a, dt_b, val_b) -> BI:
+    """构造测试用笔：dt_a/val_a 为起点分型，dt_b/val_b 为终点分型"""
+    from datetime import datetime
+    t = lambda d: datetime(2025, 1, d)
+    if direction == "Up":
+        fx_a = FX(symbol, t(dt_a), "D", val_a + 0.5, val_a, val_a, [])
+        fx_b = FX(symbol, t(dt_b), "G", val_b, val_b - 0.5, val_b, [])
+    else:
+        fx_a = FX(symbol, t(dt_a), "G", val_a, val_a - 0.5, val_a, [])
+        fx_b = FX(symbol, t(dt_b), "D", val_b + 0.5, val_b, val_b, [])
+    return BI(symbol, fx_a, fx_b, [fx_a, fx_b], direction, [])
 
 
 if __name__ == "__main__":

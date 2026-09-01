@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-缠论 · 分型与笔 报告程序
-========================
+缠论 · 分型 / 笔 / 线段 报告程序
+================================
 从 D:\\khData（DuckDB，每个标的一个 .db）读取K线，
-用 chan_fx_bi 做「去包含 → 分型 → 笔」分析，输出：
-    1) 终端文本报告（分型清单 + 笔清单 + 结构统计）
-    2) HTML 图表报告（K线 + 笔 + 顶/底分型 + 成交量，自包含可离线打开）
+用 chan_fx_bi 做「去包含 → 分型 → 笔 → 线段」分析，输出：
+    1) 终端文本报告（分型清单 + 笔清单 + 线段清单 + 结构统计）
+    2) HTML 图表报告（K线 + 笔 + 线段 + 顶/底分型 + 成交量，自包含可离线打开）
 
 按需求，本报告【不含】中枢、买卖点、背驰、趋势判断。
 
@@ -287,11 +287,29 @@ def print_report(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC):
     bis = c.bi_list
     up_cnt = sum(1 for b in bis if b.direction == "Up")
     dn_cnt = sum(1 for b in bis if b.direction == "Down")
+    segs = c.segments
+    fsegs = [s for s in segs if s.finished]
+    sup_cnt = sum(1 for s in fsegs if s.direction == "Up")
+    sdn_cnt = sum(1 for s in fsegs if s.direction == "Down")
     print("[结构统计]")
     print(f"  去包含K线（未完成笔）：{len(c.bars_ubi)} 根")
     print(f"  分型：{len(fxs)} 个（顶 {g_cnt} / 底 {d_cnt}，含笔内部分型）")
     print(f"  笔：{len(bis)} 笔（向上 {up_cnt} / 向下 {dn_cnt}）")
+    print(f"  线段：{len(fsegs)} 段已确认（向上 {sup_cnt} / 向下 {sdn_cnt}）"
+          + (f"，另有 1 段未完成" if len(segs) > len(fsegs) else ""))
     print(f"  最后一笔延伸中：{'是' if c.last_bi_extend else '否'}")
+    print(sub)
+
+    # ---- 线段清单 ----
+    print(f"[线段清单]（共 {len(segs)} 段，已完成 {len(fsegs)} 段）")
+    if not segs:
+        print("  暂无线段（尚无已完成笔）")
+    for i, s in enumerate(segs, 1):
+        d = "向上" if s.direction == "Up" else "向下"
+        state = "完成" if s.finished else "未完成"
+        print(f"  {i:>2}. {d}线段  {s.start_dt:%Y-%m-%d %H:%M} -> {s.end_dt:%Y-%m-%d %H:%M}"
+              f"  区间[{s.get_low():.3f}, {s.get_high():.3f}]"
+              f"  笔数{s.get_length()}  价差{s.get_power():.3f}  [{state}]")
     print(sub)
 
     # ---- 笔清单 ----
@@ -319,7 +337,7 @@ def print_report(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC):
 
 
 # =====================================================================
-# 三、HTML 图表报告（ECharts：K线 + 笔 + 顶/底分型 + 成交量）
+# 三、HTML 图表报告（ECharts：K线 + 笔 + 线段 + 顶/底分型 + 成交量）
 # =====================================================================
 
 def _ts(dt):
@@ -362,20 +380,28 @@ table.bi th,table.bi td{border:1px solid #eee;padding:6px 10px;text-align:left;f
 table.bi th{background:#fafbfc;color:#666;font-weight:normal}
 table.bi tr.up td.dir{color:#e0503e;font-weight:bold}
 table.bi tr.down td.dir{color:#1a9a5a;font-weight:bold}
+table.bi tr.upseg td.dir{color:#2f6fed;font-weight:bold}
+table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
 .footer{color:#999;font-size:12px;text-align:center;margin:16px 0 30px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="header">
-    <h1>缠论 · 分型与笔 · __SYMBOL__</h1>
+    <h1>缠论 · 分型 / 笔 / 线段 · __SYMBOL__</h1>
     <div class="meta">
       周期：__FREQ__ ｜ 判断区间：__SDT__ ~ __EDT__ ｜ 数据：__BARS__ 根原始K线（含 __PREWARM__ 根历史预热）<br>
-      最新K线：__CLOSEDT__ ｜ 分型：__FXS__ 个（顶 __GFX__ / 底 __DFX__）｜ 笔：__BIS__ 笔（向上 __UPBIS__ / 向下 __DNBIS__）
+      最新K线：__CLOSEDT__ ｜ 分型：__FXS__ 个（顶 __GFX__ / 底 __DFX__）｜ 笔：__BIS__ 笔（向上 __UPBIS__ / 向下 __DNBIS__）<br>
+      线段：__SEGS__ 段已确认（向上 __UPSEGS__ / 向下 __DNSEGS__）__UNFINSEGS__
     </div>
   </div>
   <div id="chart" style="width:100%;height:__CHART_H__px;"></div>
   <div class="report">
+    <h2>线段清单</h2>
+    <table class="bi">
+      <tr><th>#</th><th>方向</th><th>起点分型</th><th>终点分型</th><th>起始时间</th><th>结束时间</th><th>区间 [低, 高]</th><th>笔数</th><th>价差</th><th>状态</th></tr>
+      __SEG_ROWS__
+    </table>
     <h2>笔清单</h2>
     <table class="bi">
       <tr><th>#</th><th>方向</th><th>起点分型</th><th>终点分型</th><th>起始时间</th><th>结束时间</th><th>区间 [低, 高]</th><th>长度</th><th>价差</th></tr>
@@ -387,7 +413,7 @@ table.bi tr.down td.dir{color:#1a9a5a;font-weight:bold}
       __FX_ROWS__
     </table>
   </div>
-  <div class="footer">本报告由 chan_report.py 自动生成（仅分型与笔，不含中枢/买卖点）｜ 缠论技术分析仅供参考，不构成投资建议</div>
+  <div class="footer">本报告由 chan_report.py 自动生成（分型 / 笔 / 线段，不含中枢/买卖点）｜ 缠论技术分析仅供参考，不构成投资建议</div>
 </div>
 <script>
 var DATA = __DATA__;
@@ -395,7 +421,7 @@ var chart = echarts.init(document.getElementById('chart'));
 var option = {
   animation:false,
   tooltip:{trigger:'axis',axisPointer:{type:'cross'},backgroundColor:'rgba(255,255,255,.96)',borderColor:'#ddd',textStyle:{color:'#333',fontSize:12}},
-  legend:{data:['K线','笔','顶分型','底分型'],top:6,textStyle:{fontSize:12}},
+  legend:{data:['K线','笔','线段','顶分型','底分型'],top:6,textStyle:{fontSize:12}},
   axisPointer:{link:[{xAxisIndex:'all'}]},
   grid:[
     {left:70,right:28,top:42,height:'62%'},
@@ -415,7 +441,8 @@ var option = {
   ],
   series:[
     {name:'K线',type:'candlestick',data:DATA.kline,itemStyle:{color:'#e0503e',color0:'#1a9a5a',borderColor:'#e0503e',borderColor0:'#1a9a5a'}},
-    {name:'笔',type:'line',data:DATA.biLine,symbol:'none',lineStyle:{width:1.6,color:'#222'},z:6},
+    {name:'笔',type:'line',data:DATA.biLine,symbol:'none',lineStyle:{width:1.2,color:'#999'},z:5},
+    {name:'线段',type:'line',data:DATA.segLine,symbol:'none',lineStyle:{width:2.6,color:'#2f6fed'},z:8},
     {name:'顶分型',type:'scatter',data:DATA.topFx,symbol:'triangle',symbolSize:12,itemStyle:{color:'#e0503e',borderColor:'#a02010',borderWidth:0.5},z:7},
     {name:'底分型',type:'scatter',data:DATA.bottomFx,symbol:'triangle',symbolRotate:180,symbolSize:12,itemStyle:{color:'#1a9a5a',borderColor:'#0a6a3a',borderWidth:0.5},z:7},
     {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:DATA.vols,itemStyle:{color:function(p){return p.data[1]>0?'#e0503e':'#1a9a5a'}}}
@@ -470,6 +497,16 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
         bi_line.append([_to_idx(b.fx_a.dt), round(b.fx_a.fx, 3)])
         bi_line.append([_to_idx(b.fx_b.dt), round(b.fx_b.fx, 3)])
 
+    # 线段线（端点连线）：每根线段独立成线，中间用 None 断开折线，
+    # 避免相邻线段端点被硬连成"假桥接线"（如 顶分型→顶分型 出现在孤笔区）
+    segs = c.segments
+    seg_line = []
+    for s in segs:
+        if seg_line:
+            seg_line.append(None)
+        seg_line.append([_to_idx(s.fx_a.dt), round(s.fx_a.fx, 3)])
+        seg_line.append([_to_idx(s.fx_b.dt), round(s.fx_b.fx, 3)])
+
     # 分型（笔端点分型，避免笔内部分型堆叠）
     top_fx, bottom_fx, seen = [], [], set()
     for b in bis_:
@@ -489,6 +526,22 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
     d_cnt = sum(1 for x in fxs if x.mark == "D")
     up_cnt = sum(1 for b in bis_ if b.direction == "Up")
     dn_cnt = sum(1 for b in bis_ if b.direction == "Down")
+    fsegs = [s for s in segs if s.finished]
+    useg_cnt = sum(1 for s in fsegs if s.direction == "Up")
+    dseg_cnt = sum(1 for s in fsegs if s.direction == "Down")
+
+    seg_rows = []
+    for i, s in enumerate(segs, 1):
+        cls = "upseg" if s.direction == "Up" else "dnseg"
+        d = "向上" if s.direction == "Up" else "向下"
+        state = "完成" if s.finished else "未完成"
+        seg_rows.append(
+            f"<tr class='{cls}'><td>{i}</td><td class='dir'>{d}</td>"
+            f"<td>{'顶' if s.fx_a.mark == 'G' else '底'} {s.fx_a.fx:.3f}</td>"
+            f"<td>{'顶' if s.fx_b.mark == 'G' else '底'} {s.fx_b.fx:.3f}</td>"
+            f"<td>{s.start_dt:%Y-%m-%d %H:%M}</td><td>{s.end_dt:%Y-%m-%d %H:%M}</td>"
+            f"<td>[{s.get_low():.3f}, {s.get_high():.3f}]</td>"
+            f"<td>{s.get_length()}</td><td>{s.get_power():.3f}</td><td>{state}</td></tr>")
 
     bi_rows = []
     for i, b in enumerate(bis_, 1):
@@ -513,7 +566,7 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
 
     js_data = {
         "catLabels": cat_labels, "labelInterval": label_interval,
-        "kline": kline, "biLine": bi_line,
+        "kline": kline, "biLine": bi_line, "segLine": seg_line,
         "topFx": top_fx, "bottomFx": bottom_fx,
         "vols": vol_data,
         "zoomStart": max(0, round((1 - 800.0 / max(n, 1)) * 100)),
@@ -528,7 +581,7 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
             label.replace(".", "_"), freq, edt.strftime("%Y%m%d")))
 
     html = _HTML_TEMPLATE
-    html = html.replace("__TITLE__", "缠论·分型与笔 %s %s" % (label, freq))
+    html = html.replace("__TITLE__", "缠论·分型/笔/线段 %s %s" % (label, freq))
     html = html.replace("__ECHARTS__", _echarts_src(out_path))
     html = html.replace("__SYMBOL__", label)
     html = html.replace("__FREQ__", freq)
@@ -543,6 +596,12 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
     html = html.replace("__BIS__", str(len(bis_)))
     html = html.replace("__UPBIS__", str(up_cnt))
     html = html.replace("__DNBIS__", str(dn_cnt))
+    html = html.replace("__SEGS__", str(len(fsegs)))
+    html = html.replace("__UPSEGS__", str(useg_cnt))
+    html = html.replace("__DNSEGS__", str(dseg_cnt))
+    html = html.replace("__UNFINSEGS__",
+                        "｜ 另有 1 段未完成" if len(segs) > len(fsegs) else "")
+    html = html.replace("__SEG_ROWS__", "".join(seg_rows))
     html = html.replace("__BI_ROWS__", "".join(bi_rows))
     html = html.replace("__FX_ROWS__", "".join(fx_rows))
     html = html.replace("__CHART_H__", str(chart_h))
@@ -629,7 +688,7 @@ def main():
 
         want_html = True
         if not auto_mode:
-            ans = input("是否生成 HTML 图表报告（K线+笔+分型）？(y/n，默认 y)：").strip().lower()
+            ans = input("是否生成 HTML 图表报告（K线+笔+线段+分型）？(y/n，默认 y)：").strip().lower()
             want_html = ans not in ("n", "no")
         if want_html:
             out_html = render_html(label, freq, sdt, edt, bars, prewarm, c)
