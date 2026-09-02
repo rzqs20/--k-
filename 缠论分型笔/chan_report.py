@@ -505,8 +505,8 @@ window.addEventListener('resize',function(){chart.resize();});
 
 def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, regimes=None, out_path=None):
     """生成自包含 HTML 图表报告，返回文件路径"""
-    # 前端K线 = 全序列去包含K线（独立重算，CZSC.bars_ubi 只留尾部）
-    ubi = _remove_include_all(bars)
+    # 前端K线 = 原始K线（不去包含、不合并，成交量也用原始）
+    ubi = bars
     n = len(ubi)
     dts = [b.dt for b in ubi]
     opens = [b.open for b in ubi]
@@ -525,13 +525,7 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, reg
             return dt.strftime("%Y-%m-%d")
         return dt.strftime("%m-%d %H:%M")
 
-    cat_labels = []
-    for nb in ubi:
-        ds = [e.dt for e in nb.elements]
-        if len(ds) == 1:
-            cat_labels.append(_fmt_dt(ds[0]))
-        else:
-            cat_labels.append("、".join(_fmt_dt(d) for d in ds))
+    cat_labels = [_fmt_dt(b.dt) for b in ubi]
     label_interval = max(1, n // 14)
 
     kline = [[opens[i], closes[i], lows[i], highs[i]] for i in range(n)]
@@ -569,20 +563,12 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, reg
             else:
                 bottom_fx.append([_to_idx(fx.dt), round(fx.low, 3)])
 
-    # ---- 布林线 / RSI / 行情区段色带（指标在原始K线算，映射到去包含K线坐标）----
+    # ---- 布林线 / RSI / 行情区段色带（指标与原始K线一一对应，直接按索引对齐）----
     boll_up_line, boll_mid_line, boll_lo_line, rsi_line = [], [], [], []
     regime_area = []
     if sigs:
-        sig_by_dt = {s.dt: s for s in sigs}
-
-        def _sig_of_nb(nb):
-            for e in reversed(nb.elements):      # 取合并块内最后一根原始K线的指标值
-                if e.dt in sig_by_dt:
-                    return sig_by_dt[e.dt]
-            return None
-
-        for i, nb in enumerate(ubi):
-            sg = _sig_of_nb(nb)
+        for i in range(n):
+            sg = sigs[i] if i < len(sigs) else None
             if sg is not None and sg.upper is not None:
                 boll_up_line.append([i, round(sg.upper, 3)])
                 boll_mid_line.append([i, round(sg.mid, 3)])
