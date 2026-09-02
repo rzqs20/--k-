@@ -52,6 +52,7 @@ def _load_fx_bi_module():
 
 cb = _load_fx_bi_module()
 
+import indicators as ind
 KHDATA = r"D:\khData"
 
 # =====================================================================
@@ -267,7 +268,7 @@ def load_bars(code, exchange, freq, sdt, edt, prewarm_bars=600):
 # 二、终端文本报告
 # =====================================================================
 
-def print_report(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC):
+def print_report(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, regimes=None):
     line = "=" * 64
     sub = "-" * 64
     print()
@@ -299,6 +300,29 @@ def print_report(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC):
           + (f"，另有 1 段未完成" if len(segs) > len(fsegs) else ""))
     print(f"  最后一笔延伸中：{'是' if c.last_bi_extend else '否'}")
     print(sub)
+
+    # ---- 行情状态（布林+RSI，基于原始收盘价，不去包含）----
+    if sigs and regimes is not None:
+        valid_sigs = [s for s in sigs if s.state is not None]
+        last_sig = valid_sigs[-1] if valid_sigs else None
+        print("[行情状态]（布林20/2 + RSI14，基于原始K线收盘价，不去包含）")
+        if last_sig:
+            cn = ind.REGIME_CN.get(last_sig.state, last_sig.state)
+            extra = last_sig.note or last_sig.warn
+            bwp = f"{last_sig.bw_pct*100:.0f}%" if last_sig.bw_pct is not None else "--"
+            print(f"  最新状态：{cn}  RSI={last_sig.rsi:.1f}  带宽分位={bwp}"
+                  f"  中轨斜率={last_sig.slope*100:+.2f}%" + (f"  [{extra}]" if extra else ""))
+        print(f"[行情区段清单]（共 {len(regimes)} 段）")
+        for i, rg in enumerate(regimes, 1):
+            cn = ind.REGIME_CN.get(rg.kind, rg.kind)
+            tag = "·有效突破" if rg.notes and "有效突破" in rg.notes else ""
+            warn_tag = ""
+            if rg.warns:
+                keys = sorted({w.split(":")[-1] for w in rg.warns})
+                warn_tag = "  预警:" + "/".join(keys)
+            print(f"  {i:>2}. {cn:<6} {rg.start_dt:%Y-%m-%d %H:%M} -> {rg.end_dt:%Y-%m-%d %H:%M}"
+                  f"  {rg.bar_count}根  净{rg.net_pct:+.2f}%  均RSI{rg.rsi_mean:.1f}{tag}{warn_tag}")
+        print(sub)
 
     # ---- 线段清单 ----
     print(f"[线段清单]（共 {len(segs)} 段，已完成 {len(fsegs)} 段）")
@@ -382,21 +406,28 @@ table.bi tr.up td.dir{color:#e0503e;font-weight:bold}
 table.bi tr.down td.dir{color:#1a9a5a;font-weight:bold}
 table.bi tr.upseg td.dir{color:#2f6fed;font-weight:bold}
 table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
+table.bi tr.rg td.dir{color:#8a93a6;font-weight:bold}
 .footer{color:#999;font-size:12px;text-align:center;margin:16px 0 30px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="header">
-    <h1>缠论 · 分型 / 笔 / 线段 · __SYMBOL__</h1>
+    <h1>缠论 · 分型/笔/线段 + 布林/RSI 行情状态 · __SYMBOL__</h1>
     <div class="meta">
       周期：__FREQ__ ｜ 判断区间：__SDT__ ~ __EDT__ ｜ 数据：__BARS__ 根原始K线（含 __PREWARM__ 根历史预热）<br>
       最新K线：__CLOSEDT__ ｜ 分型：__FXS__ 个（顶 __GFX__ / 底 __DFX__）｜ 笔：__BIS__ 笔（向上 __UPBIS__ / 向下 __DNBIS__）<br>
-      线段：__SEGS__ 段已确认（向上 __UPSEGS__ / 向下 __DNSEGS__）__UNFINSEGS__
+      线段：__SEGS__ 段已确认（向上 __UPSEGS__ / 向下 __DNSEGS__）__UNFINSEGS__<br>
+      行情状态：<b>__CUR_REGIME__</b>（RSI=__CUR_RSI__；布林20/2 + RSI14，基于原始收盘价，不去包含）
     </div>
   </div>
   <div id="chart" style="width:100%;height:__CHART_H__px;"></div>
   <div class="report">
+    <h2>行情区段清单（布林定结构 + RSI 定动能）</h2>
+    <table class="bi">
+      <tr><th>#</th><th>状态</th><th>起始时间</th><th>结束时间</th><th>K线数</th><th>净涨跌</th><th>均RSI</th><th>备注</th><th>预警</th></tr>
+      __REGIME_ROWS__
+    </table>
     <h2>线段清单</h2>
     <table class="bi">
       <tr><th>#</th><th>方向</th><th>起点分型</th><th>终点分型</th><th>起始时间</th><th>结束时间</th><th>区间 [低, 高]</th><th>笔数</th><th>价差</th><th>状态</th></tr>
@@ -413,7 +444,7 @@ table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
       __FX_ROWS__
     </table>
   </div>
-  <div class="footer">本报告由 chan_report.py 自动生成（分型 / 笔 / 线段，不含中枢/买卖点）｜ 缠论技术分析仅供参考，不构成投资建议</div>
+  <div class="footer">本报告由 chan_report.py 自动生成（分型/笔/线段 + 布林20/2 + RSI14，不含中枢/买卖点）｜ 技术分析仅供参考，不构成投资建议</div>
 </div>
 <script>
 var DATA = __DATA__;
@@ -421,31 +452,47 @@ var chart = echarts.init(document.getElementById('chart'));
 var option = {
   animation:false,
   tooltip:{trigger:'axis',axisPointer:{type:'cross'},backgroundColor:'rgba(255,255,255,.96)',borderColor:'#ddd',textStyle:{color:'#333',fontSize:12}},
-  legend:{data:['K线','笔','线段','顶分型','底分型'],top:6,textStyle:{fontSize:12}},
+  legend:{data:['K线','布林上轨','布林中轨','布林下轨','笔','线段','顶分型','底分型','RSI'],top:6,textStyle:{fontSize:11}},
   axisPointer:{link:[{xAxisIndex:'all'}]},
   grid:[
-    {left:70,right:28,top:42,height:'62%'},
-    {left:70,right:28,top:'72%',height:'15%'}
+    {left:70,right:28,top:42,height:'47%'},
+    {left:70,right:28,top:'55%',height:'11%'},
+    {left:70,right:28,top:'70%',height:'12%'}
   ],
   xAxis:[
     {type:'category',gridIndex:0,data:DATA.catLabels,axisLabel:{interval:DATA.labelInterval,color:'#666'},axisLine:{lineStyle:{color:'#ccc'}}},
-    {type:'category',gridIndex:1,data:DATA.catLabels,axisLabel:{show:false}}
+    {type:'category',gridIndex:1,data:DATA.catLabels,axisLabel:{show:false},axisLine:{show:false},axisTick:{show:false}},
+    {type:'category',gridIndex:2,data:DATA.catLabels,axisLabel:{show:false},axisLine:{lineStyle:{color:'#ccc'}}}
   ],
   yAxis:[
     {gridIndex:0,scale:true,splitLine:{lineStyle:{color:'#f0f0f0'}},axisLabel:{color:'#666'}},
-    {gridIndex:1,scale:true,splitLine:{show:false},axisLabel:{color:'#999',fontSize:10}}
+    {gridIndex:1,min:0,max:100,interval:25,splitLine:{lineStyle:{color:'#f3f3f3'}},axisLabel:{color:'#9b59b6',fontSize:10},name:'RSI',nameTextStyle:{color:'#9b59b6',fontSize:10}},
+    {gridIndex:2,scale:true,splitLine:{show:false},axisLabel:{color:'#999',fontSize:10}}
   ],
   dataZoom:[
-    {type:'inside',xAxisIndex:[0,1],start:DATA.zoomStart,end:100},
-    {type:'slider',xAxisIndex:[0,1],bottom:4,start:DATA.zoomStart,end:100,height:16}
+    {type:'inside',xAxisIndex:[0,1,2],start:DATA.zoomStart,end:100},
+    {type:'slider',xAxisIndex:[0,1,2],bottom:4,start:DATA.zoomStart,end:100,height:16}
   ],
   series:[
-    {name:'K线',type:'candlestick',data:DATA.kline,itemStyle:{color:'#e0503e',color0:'#1a9a5a',borderColor:'#e0503e',borderColor0:'#1a9a5a'}},
-    {name:'笔',type:'line',data:DATA.biLine,symbol:'none',lineStyle:{width:1.2,color:'#999'},z:5},
-    {name:'线段',type:'line',data:DATA.segLine,symbol:'none',lineStyle:{width:2.6,color:'#2f6fed'},z:8},
-    {name:'顶分型',type:'scatter',data:DATA.topFx,symbol:'triangle',symbolSize:12,itemStyle:{color:'#e0503e',borderColor:'#a02010',borderWidth:0.5},z:7},
-    {name:'底分型',type:'scatter',data:DATA.bottomFx,symbol:'triangle',symbolRotate:180,symbolSize:12,itemStyle:{color:'#1a9a5a',borderColor:'#0a6a3a',borderWidth:0.5},z:7},
-    {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:DATA.vols,itemStyle:{color:function(p){return p.data[1]>0?'#e0503e':'#1a9a5a'}}}
+    {name:'行情区段',type:'line',data:[],silent:true,symbol:'none',lineStyle:{opacity:0},xAxisIndex:0,yAxisIndex:0,
+     markArea:{silent:true,label:{show:false},data:DATA.regimeArea},z:1},
+    {name:'K线',type:'candlestick',xAxisIndex:0,yAxisIndex:0,data:DATA.kline,itemStyle:{color:'#e0503e',color0:'#1a9a5a',borderColor:'#e0503e',borderColor0:'#1a9a5a'}},
+    {name:'布林上轨',type:'line',xAxisIndex:0,yAxisIndex:0,data:DATA.bollUp,symbol:'none',lineStyle:{width:1,color:'#e6a23c',type:'dashed',opacity:.85},z:3},
+    {name:'布林中轨',type:'line',xAxisIndex:0,yAxisIndex:0,data:DATA.bollMid,symbol:'none',lineStyle:{width:1.1,color:'#d48806'},z:3},
+    {name:'布林下轨',type:'line',xAxisIndex:0,yAxisIndex:0,data:DATA.bollLo,symbol:'none',lineStyle:{width:1,color:'#e6a23c',type:'dashed',opacity:.85},z:3},
+    {name:'笔',type:'line',xAxisIndex:0,yAxisIndex:0,data:DATA.biLine,symbol:'none',lineStyle:{width:1.2,color:'#999'},z:5},
+    {name:'线段',type:'line',xAxisIndex:0,yAxisIndex:0,data:DATA.segLine,symbol:'none',lineStyle:{width:2.6,color:'#2f6fed'},z:8},
+    {name:'顶分型',type:'scatter',xAxisIndex:0,yAxisIndex:0,data:DATA.topFx,symbol:'triangle',symbolSize:12,itemStyle:{color:'#e0503e',borderColor:'#a02010',borderWidth:0.5},z:7},
+    {name:'底分型',type:'scatter',xAxisIndex:0,yAxisIndex:0,data:DATA.bottomFx,symbol:'triangle',symbolRotate:180,symbolSize:12,itemStyle:{color:'#1a9a5a',borderColor:'#0a6a3a',borderWidth:0.5},z:7},
+    {name:'RSI',type:'line',xAxisIndex:1,yAxisIndex:1,data:DATA.rsi,symbol:'none',lineStyle:{width:1.2,color:'#9b59b6'},
+     markLine:{silent:true,symbol:'none',data:[
+       {yAxis:70,lineStyle:{color:'#e0503e',type:'dashed',opacity:.45},label:{fontSize:9,color:'#e0503e'}},
+       {yAxis:30,lineStyle:{color:'#1a9a5a',type:'dashed',opacity:.45},label:{fontSize:9,color:'#1a9a5a'}},
+       {yAxis:50,lineStyle:{color:'#bbb',type:'dotted',opacity:.6},label:{show:false}},
+       {yAxis:60,lineStyle:{color:'#ccc',type:'dotted',opacity:.4},label:{show:false}},
+       {yAxis:40,lineStyle:{color:'#ccc',type:'dotted',opacity:.4},label:{show:false}}
+     ]}},
+    {name:'成交量',type:'bar',xAxisIndex:2,yAxisIndex:2,data:DATA.vols}
   ]
 };
 chart.setOption(option);
@@ -456,7 +503,7 @@ window.addEventListener('resize',function(){chart.resize();});
 """
 
 
-def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None):
+def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, regimes=None, out_path=None):
     """生成自包含 HTML 图表报告，返回文件路径"""
     # 前端K线 = 全序列去包含K线（独立重算，CZSC.bars_ubi 只留尾部）
     ubi = _remove_include_all(bars)
@@ -488,7 +535,9 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
     label_interval = max(1, n // 14)
 
     kline = [[opens[i], closes[i], lows[i], highs[i]] for i in range(n)]
-    vol_data = [[vols[i], 1 if closes[i] >= opens[i] else -1] for i in range(n)]
+    vol_data = [{"value": vols[i],
+                 "itemStyle": {"color": "#e0503e" if closes[i] >= opens[i] else "#1a9a5a"}}
+                for i in range(n)]
 
     # 笔线（端点连线，索引坐标）
     bis_ = c.bi_list
@@ -519,6 +568,68 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
                 top_fx.append([_to_idx(fx.dt), round(fx.high, 3)])
             else:
                 bottom_fx.append([_to_idx(fx.dt), round(fx.low, 3)])
+
+    # ---- 布林线 / RSI / 行情区段色带（指标在原始K线算，映射到去包含K线坐标）----
+    boll_up_line, boll_mid_line, boll_lo_line, rsi_line = [], [], [], []
+    regime_area = []
+    if sigs:
+        sig_by_dt = {s.dt: s for s in sigs}
+
+        def _sig_of_nb(nb):
+            for e in reversed(nb.elements):      # 取合并块内最后一根原始K线的指标值
+                if e.dt in sig_by_dt:
+                    return sig_by_dt[e.dt]
+            return None
+
+        for i, nb in enumerate(ubi):
+            sg = _sig_of_nb(nb)
+            if sg is not None and sg.upper is not None:
+                boll_up_line.append([i, round(sg.upper, 3)])
+                boll_mid_line.append([i, round(sg.mid, 3)])
+                boll_lo_line.append([i, round(sg.lower, 3)])
+            else:
+                boll_up_line.append([i, None])
+                boll_mid_line.append([i, None])
+                boll_lo_line.append([i, None])
+            rsi_line.append([i, round(sg.rsi, 2)] if (sg is not None and sg.rsi is not None) else [i, None])
+
+    if regimes:
+        y_min = min(lows)
+        y_max = max(highs)
+        pad = (y_max - y_min) * 0.02
+        y_min, y_max = y_min - pad, y_max + pad
+        for rg in regimes:
+            color = ind.REGIME_COLOR.get(rg.kind, 'rgba(0,0,0,0)')
+            if color == 'rgba(0,0,0,0)':
+                continue  # 中性区段不画底色
+            x0 = max(0, _to_idx(rg.start_dt, 'left'))
+            x1 = min(n - 1, _to_idx(rg.end_dt, 'right'))
+            cn = ind.REGIME_CN.get(rg.kind, rg.kind)
+            regime_area.append([
+                {'name': cn, 'itemStyle': {'color': color}, 'coord': [x0, round(y_min, 3)]},
+                {'itemStyle': {'color': color}, 'coord': [x1, round(y_max, 3)]},
+            ])
+
+    # ---- 行情区段表格行 ----
+    regime_rows = []
+    if regimes:
+        for i, rg in enumerate(regimes, 1):
+            cn = ind.REGIME_CN.get(rg.kind, rg.kind)
+            cls = 'up' if rg.kind in (ind.TREND_UP, ind.BREAK_UP) else (
+                'down' if rg.kind in (ind.TREND_DN, ind.BREAK_DN) else 'rg')
+            note = '有效突破' if rg.notes and '有效突破' in rg.notes else ''
+            warn_keys = sorted({w.split(':')[-1] for w in rg.warns})
+            regime_rows.append(
+                f"<tr class='{cls}'><td>{i}</td><td class='dir'>{cn}</td>"
+                f"<td>{rg.start_dt:%Y-%m-%d %H:%M}</td><td>{rg.end_dt:%Y-%m-%d %H:%M}</td>"
+                f"<td>{rg.bar_count}</td><td>{rg.net_pct:+.2f}%</td>"
+                f"<td>{rg.rsi_mean:.1f}</td><td>{note}</td><td>{'/'.join(warn_keys)}</td></tr>")
+        valid_sigs = [s for s in sigs if s.state is not None]
+        last_sig = valid_sigs[-1] if valid_sigs else None
+        cur_regime = ind.REGIME_CN.get(last_sig.state, '--') if last_sig else '--'
+        cur_rsi = f'{last_sig.rsi:.1f}' if last_sig and last_sig.rsi is not None else '--'
+    else:
+        cur_regime = cur_rsi = '--'
 
     # ---- 统计 ----
     fxs = c.fx_list
@@ -569,6 +680,8 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
         "kline": kline, "biLine": bi_line, "segLine": seg_line,
         "topFx": top_fx, "bottomFx": bottom_fx,
         "vols": vol_data,
+        "bollUp": boll_up_line, "bollMid": boll_mid_line, "bollLo": boll_lo_line,
+        "rsi": rsi_line, "regimeArea": regime_area,
         "zoomStart": max(0, round((1 - 800.0 / max(n, 1)) * 100)),
     }
 
@@ -604,6 +717,9 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, out_path=None)
     html = html.replace("__SEG_ROWS__", "".join(seg_rows))
     html = html.replace("__BI_ROWS__", "".join(bi_rows))
     html = html.replace("__FX_ROWS__", "".join(fx_rows))
+    html = html.replace("__REGIME_ROWS__", "".join(regime_rows))
+    html = html.replace("__CUR_REGIME__", cur_regime)
+    html = html.replace("__CUR_RSI__", cur_rsi)
     html = html.replace("__CHART_H__", str(chart_h))
     html = html.replace("__DATA__", json.dumps(js_data, ensure_ascii=False))
 
@@ -687,14 +803,15 @@ def main():
         # （Rust 默认 50 为控内存，批量分析时应覆盖全部区间）
         max_bi_num = max(200, len(bars))
         c = cb.CZSC(bars, max_bi_num=max_bi_num, min_bi_len=6)
-        print_report(label, freq, sdt, edt, bars, prewarm, c)
+        sigs, regimes = ind.analyze_regime(bars)
+        print_report(label, freq, sdt, edt, bars, prewarm, c, sigs, regimes)
 
         want_html = True
         if not auto_mode:
             ans = input("是否生成 HTML 图表报告（K线+笔+线段+分型）？(y/n，默认 y)：").strip().lower()
             want_html = ans not in ("n", "no")
         if want_html:
-            out_html = render_html(label, freq, sdt, edt, bars, prewarm, c)
+            out_html = render_html(label, freq, sdt, edt, bars, prewarm, c, sigs, regimes)
             print(f"[HTML] 报告已生成：{out_html}")
             open_browser = True
             if not auto_mode:
