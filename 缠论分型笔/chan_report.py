@@ -322,6 +322,8 @@ def print_report(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, re
                 warn_tag = "  预警:" + "/".join(keys)
             print(f"  {i:>2}. {cn:<6} {rg.start_dt:%Y-%m-%d %H:%M} -> {rg.end_dt:%Y-%m-%d %H:%M}"
                   f"  {rg.bar_count}根  净{rg.net_pct:+.2f}%  均RSI{rg.rsi_mean:.1f}{tag}{warn_tag}")
+            if rg.reason:
+                print(f"       依据：{rg.reason}")
         print(sub)
 
     # ---- 线段清单 ----
@@ -425,9 +427,10 @@ table.bi tr.rg td.dir{color:#8a93a6;font-weight:bold}
   <div class="report">
     <h2>行情区段清单（布林定结构 + RSI 定动能）</h2>
     <table class="bi">
-      <tr><th>#</th><th>状态</th><th>起始时间</th><th>结束时间</th><th>K线数</th><th>净涨跌</th><th>均RSI</th><th>备注</th><th>预警</th></tr>
+      <tr><th>#</th><th>状态</th><th>起始时间</th><th>结束时间</th><th>K线数</th><th>净涨跌</th><th>均RSI</th><th>备注</th><th>预警</th><th>判定依据</th></tr>
       __REGIME_ROWS__
     </table>
+    __RULES_BLOCK__
     <h2>线段清单</h2>
     <table class="bi">
       <tr><th>#</th><th>方向</th><th>起点分型</th><th>终点分型</th><th>起始时间</th><th>结束时间</th><th>区间 [低, 高]</th><th>笔数</th><th>价差</th><th>状态</th></tr>
@@ -609,13 +612,47 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, reg
                 f"<tr class='{cls}'><td>{i}</td><td class='dir'>{cn}</td>"
                 f"<td>{rg.start_dt:%Y-%m-%d %H:%M}</td><td>{rg.end_dt:%Y-%m-%d %H:%M}</td>"
                 f"<td>{rg.bar_count}</td><td>{rg.net_pct:+.2f}%</td>"
-                f"<td>{rg.rsi_mean:.1f}</td><td>{note}</td><td>{'/'.join(warn_keys)}</td></tr>")
+                f"<td>{rg.rsi_mean:.1f}</td><td>{note}</td><td>{'/'.join(warn_keys)}</td><td style='text-align:left;color:#555;font-size:12px;'>{rg.reason}</td></tr>")
         valid_sigs = [s for s in sigs if s.state is not None]
         last_sig = valid_sigs[-1] if valid_sigs else None
         cur_regime = ind.REGIME_CN.get(last_sig.state, '--') if last_sig else '--'
         cur_rsi = f'{last_sig.rsi:.1f}' if last_sig and last_sig.rsi is not None else '--'
     else:
         cur_regime = cur_rsi = '--'
+
+    # ---- 判定规则与参数区块（供调参参考）----
+    rules_rows = [
+        ('1', '趋势上·有效突破', '收盘>上轨 且 超上轨0.5% 且 连续2根收在上轨外 且 RSI>60'),
+        ('2', '趋势下·有效突破', '收盘<下轨 且 低下轨0.5% 且 连续2根收在下轨外 且 RSI<40'),
+        ('3', '向上突破中', '收盘>上轨，但未同时满足有效突破三条件；RSI<50时标 RSI背离·存疑'),
+        ('4', '向下突破中', '收盘<下轨，对称；RSI>50时标 RSI背离·存疑'),
+        ('5', '强盘整', '带宽<近250根20%分位 且 连续8根在轨内 且 中轨20根斜率绝对值<0.5%'),
+        ('6', '盘整', '上面两条件只满足一个'),
+        ('7', '趋势上', '收盘>中轨 且 中轨斜率向上 且 RSI>50'),
+        ('8', '趋势下', '收盘<中轨 且 中轨斜率向下 且 RSI<50'),
+        ('9', '中性', '以上都不满足（聚合时并入盘整震荡）'),
+    ]
+    dp = ind.DEFAULT_PARAMS
+    param_rows = [
+        ('boll_n / boll_k', f"{dp['boll_n']} / {dp['boll_k']}", '布林周期 / 标准差倍数（高波动品种可调2.5）'),
+        ('rsi_period', f"{dp['rsi_period']}", 'RSI周期（Wilder平滑）'),
+        ('bw_window / bw_q', f"{dp['bw_window']} / {dp['bw_q']}", '带宽分位窗口 / 低分位阈值'),
+        ('range_bars / flat_slope', f"{dp['range_bars']} / {dp['flat_slope']}", '盘整连续轨内根数 / 中轨走平斜率阈值'),
+        ('breakout_pct / hold_bars', f"{dp['breakout_pct']} / {dp['hold_bars']}", '有效突破幅度过滤 / 站稳根数'),
+        ('rsi mid/strong/weak/ob/os', '50 / 60 / 40 / 70 / 30', 'RSI多空分界/强弱/超买超卖预警（70/30不改状态）'),
+        ('min_seg_bars', f"{dp['min_seg_bars']}", '区段最小区根数（短于此视为抖动吸收）'),
+    ]
+    rb = ['<details open><summary style="cursor:pointer;font-size:14px;color:#2f6fed;margin:12px 0 6px;">判定规则与参数（调参参考，优先级从高到低）</summary>']
+    rb.append('<table class="bi"><tr><th>优先级</th><th>状态</th><th>条件</th></tr>')
+    for pri, st, cond in rules_rows:
+        rb.append(f'<tr><td>{pri}</td><td>{st}</td><td style="text-align:left">{cond}</td></tr>')
+    rb.append('</table>')
+    rb.append('<h3 style="font-size:13px;margin:14px 0 4px;color:#666;">当前参数值</h3>')
+    rb.append('<table class="bi"><tr><th>参数</th><th>当前值</th><th>说明</th></tr>')
+    for p, v, d in param_rows:
+        rb.append(f'<tr><td>{p}</td><td>{v}</td><td style="text-align:left">{d}</td></tr>')
+    rb.append('</table></details>')
+    rules_block = ''.join(rb)
 
     # ---- 统计 ----
     fxs = c.fx_list
@@ -706,6 +743,7 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c: cb.CZSC, sigs=None, reg
     html = html.replace("__REGIME_ROWS__", "".join(regime_rows))
     html = html.replace("__CUR_REGIME__", cur_regime)
     html = html.replace("__CUR_RSI__", cur_rsi)
+    html = html.replace("__RULES_BLOCK__", rules_block)
     html = html.replace("__CHART_H__", str(chart_h))
     html = html.replace("__DATA__", json.dumps(js_data, ensure_ascii=False))
 

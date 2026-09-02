@@ -73,6 +73,17 @@ REGIME_COLOR = {
     NEUTRAL: "rgba(0,0,0,0)",
 }
 
+# ---- 默认参数（与 analyze_regime 签名默认值一致，供报告展示/调参参考）----
+DEFAULT_PARAMS = {
+    "boll_n": 20, "boll_k": 2.0,
+    "rsi_period": 14,
+    "bw_window": 250, "bw_q": 0.20, "bw_min_window": 60,
+    "range_bars": 8, "flat_slope": 0.005,
+    "breakout_pct": 0.005, "hold_bars": 2,
+    "rsi_mid": 50, "rsi_strong": 60, "rsi_weak": 40, "rsi_ob": 70, "rsi_os": 30,
+    "min_seg_bars": 8,
+}
+
 
 # =====================================================================
 # 一、基础指标
@@ -175,6 +186,7 @@ class BarSignal:
     state: Optional[str]      # 主状态（预热期 None）
     warn: str = ""            # 预警标签：超买/超卖/RSI背离·存疑
     note: str = ""            # 有效突破 等备注
+    conds: dict = field(default_factory=dict)  # 本根各判定条件命中情况
 
 
 @dataclass
@@ -188,6 +200,7 @@ class RegimeSeg:
     rsis: List[float] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     warns: List[str] = field(default_factory=list)
+    reason: str = ""          # 区段判定依据（各条件命中比例）
 
     @property
     def start_dt(self) -> datetime:
@@ -261,6 +274,7 @@ def analyze_regime(bars,
     for t in range(size):
         warn, note = "", ""
         state: Optional[str] = None
+        conds: dict = {}
         r = rsi[t]
 
         # 指标未齐备（布林/RSI/斜率缺一）→ 预热
@@ -335,11 +349,24 @@ def analyze_regime(bars,
                 state = NEUTRAL
             raw_states[t] = state
 
+            # 记录本根各条件命中情况（供区段判定依据统计）
+            conds = {
+                "break_up": bool(break_up), "break_dn": bool(break_dn),
+                "valid_up": bool(valid_up), "valid_dn": bool(valid_dn),
+                "cond_vol": bool(cond_vol), "cond_price": bool(cond_price),
+                "above_mid": bool(mid[t] is not None and c > mid[t]),
+                "slope_up": bool(slope[t] is not None and slope[t] > 0),
+                "rsi_bull": bool(r is not None and r > rsi_mid),
+                "below_mid": bool(mid[t] is not None and c < mid[t]),
+                "slope_dn": bool(slope[t] is not None and slope[t] < 0),
+                "rsi_bear": bool(r is not None and r < rsi_mid),
+            }
+
         signals.append(BarSignal(
             idx=t, dt=dts[t], close=closes[t],
             mid=mid[t], upper=upper[t], lower=lower[t],
             bw=bw[t], bw_pct=bw_pct[t], slope=slope[t], rsi=r,
-            state=state, warn=warn, note=note))
+            state=state, warn=warn, note=note, conds=conds))
 
     segments = _aggregate(raw_states, signals, min_seg_bars)
     return signals, segments
@@ -370,7 +397,7 @@ def _aggregate(raw_states, signals, min_seg_bars):
     blocks = []
     for t, st, sg in items:
         mj = _major_of(st)
-        row = (t, sg.dt, sg.close, sg.rsi, st, sg.note, sg.warn)
+        row = (t, sg.dt, sg.close, sg.rsi, st, sg.note, sg.warn, sg.conds)
         if blocks and blocks[-1]["major"] == mj:
             blocks[-1]["rows"].append(row)
         else:
@@ -439,19 +466,56 @@ def _aggregate(raw_states, signals, min_seg_bars):
         else:
             merged_blocks.append([kind, rows])
 
+    def _pct(rows, key):
+        n = len(rows)
+        return sum(1 for r in rows if r[7].get(key, False)) * 100 // n if n else 0
+
     segs = []
     for kind, rows in merged_blocks:
         major = _major_of(kind)
         notes = list(dict.fromkeys(
             r[5] for r in rows
             if r[5] and _major_of(r[4]) == major and r[4] in (TREND_UP, TREND_DN)))
+        rsi_vals = [r[3] for r in rows if r[3] is not None]
+        rsi_mean = sum(rsi_vals) / len(rsi_vals) if rsi_vals else 0.0
+        if kind == TREND_UP:
+            reason = (f"收>中轨{_pct(rows,'above_mid')}% + 中轨上行{_pct(rows,'slope_up')}%"
+                      f" + RSI>50{_pct(rows,'rsi_bull')}%")
+            if notes:
+                reason += " ·含有效突破"
+        elif kind == BREAK_UP:
+            reason = f"收>上轨{_pct(rows,'break_up')}%，未达有效突破(均RSI{rsi_mean:.0f})"
+        elif kind == TREND_DN:
+            reason = (f"收<中轨{_pct(rows,'below_mid')}% + 中轨下行{_pct(rows,'slope_dn')}%"
+                      f" + RSI<50{_pct(rows,'rsi_bear')}%")
+            if notes:
+                reason += " ·含有效突破"
+        elif kind == BREAK_DN:
+            reason = f"收<下轨{_pct(rows,'break_dn')}%，未达有效突破(均RSI{rsi_mean:.0f})"
+        elif kind in (STRONG_RANGE, RANGE):
+            n_r = len(rows)
+            range_root_pct = (sum(1 for r in rows if r[4] in (RANGE, STRONG_RANGE))
+                              * 100 // n_r) if n_r else 0
+            if kind == STRONG_RANGE:
+                base = (f"带宽<20%分位{_pct(rows,'cond_vol')}%"
+                        f" + 轨内&走平{_pct(rows,'cond_price')}%")
+            else:
+                base = (f"带宽<20%分位{_pct(rows,'cond_vol')}%"
+                        f" 或 轨内&走平{_pct(rows,'cond_price')}%")
+            if range_root_pct < 50:
+                reason = f"[过渡/拉锯] 盘整根占比{range_root_pct}%，" + base
+            else:
+                reason = base
+        else:
+            reason = ""
         segs.append(RegimeSeg(
             kind=kind, i0=rows[0][0], i1=rows[-1][0],
             dts=[r[1] for r in rows],
             closes=[r[2] for r in rows],
-            rsis=[r[3] for r in rows if r[3] is not None],
+            rsis=rsi_vals,
             notes=notes,
-            warns=[f"{r[1]:%m-%d %H:%M}:{r[6]}" for r in rows if r[6]]))
+            warns=[f"{r[1]:%m-%d %H:%M}:{r[6]}" for r in rows if r[6]],
+            reason=reason))
     return segs
 
 
