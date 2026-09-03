@@ -772,6 +772,87 @@ def _remove_include_all(bars_raw):
 # 四、主程序
 # =====================================================================
 
+class ChanReport:
+    """缠论分析报告生成器（整合数据加载、缠论分析、趋势分析、报告输出）。
+
+    用法:
+        report = ChanReport("000300.SH", "30分钟", "2024-01-01", "2026-08-31")
+        report.print_terminal()        # 终端文本报告
+        html_path = report.save_html() # HTML图表报告
+        print(report.summary)          # 统计摘要
+    """
+
+    def __init__(self, code, freq, sdt, edt, **regime_params):
+        self.code_input = code
+        self.freq = FREQ_ALIASES.get(freq, freq)
+        self.sdt = _parse_date(sdt) if isinstance(sdt, str) else sdt
+        self.edt = _parse_date(edt) if isinstance(edt, str) else edt
+
+        code_, exchange = resolve_symbol(code)
+        if not exchange:
+            raise ValueError(f"无法判断 {code} 的市场")
+        self.code = code_
+        self.exchange = exchange
+
+        self.label, self.bars, self.prewarm = load_bars(
+            code_, exchange, self.freq, self.sdt, self.edt)
+
+        max_bi_num = max(200, len(self.bars))
+        self.chan = cb.CZSC(self.bars, max_bi_num=max_bi_num, min_bi_len=6)
+        self.analyzer = ind.RegimeAnalyzer(self.bars, **regime_params)
+
+    # ---- 缠论便捷属性 ----
+
+    @property
+    def fenxings(self):
+        """分型列表。"""
+        return self.chan.fx_list
+
+    @property
+    def bis(self):
+        """笔列表（已完成）。"""
+        return self.chan.get_finished_bis()
+
+    @property
+    def segments(self):
+        """线段列表（已完成）。"""
+        return self.chan.get_finished_segments()
+
+    # ---- 趋势便捷属性 ----
+
+    @property
+    def current_state(self):
+        """当前行情状态。"""
+        return self.analyzer.current_state
+
+    @property
+    def regimes(self):
+        """行情区段列表。"""
+        return self.analyzer.regimes
+
+    @property
+    def summary(self):
+        """统计摘要字典。"""
+        return self.analyzer.summary()
+
+    # ---- 输出 ----
+
+    def print_terminal(self):
+        """打印终端文本报告。"""
+        print_report(
+            self.label, self.freq, self.sdt, self.edt,
+            self.bars, self.prewarm, self.chan,
+            self.analyzer.signals, self.analyzer.regimes)
+
+    def save_html(self, out_path=None):
+        """生成HTML图表报告，返回文件路径。"""
+        return render_html(
+            self.label, self.freq, self.sdt, self.edt,
+            self.bars, self.prewarm, self.chan,
+            self.analyzer.signals, self.analyzer.regimes,
+            out_path=out_path)
+
+
 def main():
     args = sys.argv[1:]
     if len(args) >= 4:

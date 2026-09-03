@@ -578,5 +578,62 @@ def _selftest():
     print("（自检数据为合成正弦/单边序列，仅验证规则触发逻辑）")
 
 
+class RegimeAnalyzer:
+    """布林+RSI 行情状态分析器（封装指标计算与区段聚合）。"""
+
+    def __init__(self, bars,
+                 boll_n=20, boll_k=2.0, rsi_period=14,
+                 bw_window=250, bw_q=0.20, bw_min_window=60,
+                 range_bars=8, flat_slope=0.005,
+                 breakout_pct=0.005, hold_bars=2,
+                 rsi_mid=50.0, rsi_strong=60.0, rsi_weak=40.0,
+                 rsi_ob=70.0, rsi_os=30.0,
+                 min_seg_bars=8):
+        self.bars = list(bars)
+        self.params = dict(
+            boll_n=boll_n, boll_k=boll_k, rsi_period=rsi_period,
+            bw_window=bw_window, bw_q=bw_q, bw_min_window=bw_min_window,
+            range_bars=range_bars, flat_slope=flat_slope,
+            breakout_pct=breakout_pct, hold_bars=hold_bars,
+            rsi_mid=rsi_mid, rsi_strong=rsi_strong, rsi_weak=rsi_weak,
+            rsi_ob=rsi_ob, rsi_os=rsi_os, min_seg_bars=min_seg_bars)
+        self.signals, self.regimes = analyze_regime(
+            self.bars, boll_n=boll_n, boll_k=boll_k, rsi_period=rsi_period,
+            bw_window=bw_window, bw_q=bw_q, bw_min_window=bw_min_window,
+            range_bars=range_bars, flat_slope=flat_slope,
+            breakout_pct=breakout_pct, hold_bars=hold_bars,
+            rsi_mid=rsi_mid, rsi_strong=rsi_strong, rsi_weak=rsi_weak,
+            rsi_ob=rsi_ob, rsi_os=rsi_os, min_seg_bars=min_seg_bars)
+
+    @property
+    def current_state(self):
+        if not self.signals:
+            return "无数据"
+        return REGIME_CN.get(self.signals[-1].state, self.signals[-1].state)
+
+    @property
+    def current_rsi(self):
+        if not self.signals or self.signals[-1].rsi is None:
+            return None
+        return round(self.signals[-1].rsi, 1)
+
+    @property
+    def trend_segments(self):
+        return [s for s in self.regimes if s.kind in (TREND_UP, TREND_DN)]
+
+    @property
+    def range_segments(self):
+        return [s for s in self.regimes if s.kind == RANGE]
+
+    def summary(self):
+        return {
+            "总区段": len(self.regimes),
+            "趋势段": len(self.trend_segments),
+            "盘整段": len(self.range_segments),
+            "当前状态": self.current_state,
+            "当前RSI": self.current_rsi,
+        }
+
+
 if __name__ == "__main__":
     _selftest()
