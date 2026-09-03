@@ -36,7 +36,8 @@ table.bi th,table.bi td{border:1px solid #eee;padding:6px 10px;text-align:left;f
 table.bi th{background:#fafbfc;color:#666;font-weight:normal}
 table.bi tr.up td.dir{color:#e0503e;font-weight:bold}
 table.bi tr.down td.dir{color:#1a9a5a;font-weight:bold}
-table.bi tr.upseg td.dir{color:#2f6fed;font-weight:bold}
+table.bi tr.boxrow td{color:#a07010;}
+.upseg td.dir{color:#2f6fed;font-weight:bold}
 table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
 .footer{color:#999;font-size:12px;text-align:center;margin:16px 0 30px}
 </style>
@@ -57,6 +58,11 @@ table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
     <table class="bi">
       <tr><th>#</th><th>分类</th><th>起始时间</th><th>结束时间</th><th>起始价</th><th>结束价</th><th>涨跌幅</th><th>持续K线</th><th>斜率%/根</th><th>判断依据</th></tr>
       __TREND_ROWS__
+    </table>
+    <h2>箱体识别（基于分型，无趋势限制，共 __BOXCNT__ 个）</h2>
+    <table class="bi">
+      <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>ZG重叠上</th><th>ZD重叠下</th><th>箱体高度</th><th>分型数</th><th>K线数</th><th>判断依据</th></tr>
+      __BOX_ROWS__
     </table>
     <h2>线段清单</h2>
     <table class="bi">
@@ -107,6 +113,22 @@ var option={
     {name:'线段',type:'line',xAxisIndex:0,yAxisIndex:0,data:DATA.segLine,symbol:'none',lineStyle:{width:2.6,color:'#2f6fed'},z:8},
     {name:'顶分型',type:'scatter',xAxisIndex:0,yAxisIndex:0,data:DATA.topFx,symbol:'triangle',symbolSize:12,itemStyle:{color:'#e0503e',borderColor:'#a02010',borderWidth:0.5},z:7},
     {name:'底分型',type:'scatter',xAxisIndex:0,yAxisIndex:0,data:DATA.bottomFx,symbol:'triangle',symbolRotate:180,symbolSize:12,itemStyle:{color:'#1a9a5a',borderColor:'#0a6a3a',borderWidth:0.5},z:7},
+    {name:'箱体',type:'custom',xAxisIndex:0,yAxisIndex:0,data:DATA.boxRects,z:3,
+      encode:{x:[0,1],y:[2,3]},clip:true,
+      renderItem:function(params,api){
+        var p0=api.coord([api.value(0),api.value(2)]);
+        var p1=api.coord([api.value(1),api.value(3)]);
+        return {type:'rect',shape:{x:p0[0],y:p1[1],width:Math.max(1,p1[0]-p0[0]),height:Math.max(1,p0[1]-p1[1])},
+          style:{fill:'rgba(250,173,20,0.10)',stroke:'#e8a020',lineWidth:1.6}};
+      }},
+    {name:'重叠核心',type:'custom',xAxisIndex:0,yAxisIndex:0,data:DATA.boxCores,z:3,
+      encode:{x:[0,1],y:[2,3]},clip:true,silent:true,
+      renderItem:function(params,api){
+        var p0=api.coord([api.value(0),api.value(2)]);
+        var p1=api.coord([api.value(1),api.value(3)]);
+        return {type:'rect',shape:{x:p0[0],y:p1[1],width:Math.max(1,p1[0]-p0[0]),height:Math.max(1,p0[1]-p1[1])},
+          style:{fill:'rgba(232,160,32,0.30)',stroke:'transparent'}};
+      }},
     {name:'成交量',type:'bar',xAxisIndex:1,yAxisIndex:1,data:DATA.vols}
   ]
 };
@@ -179,12 +201,90 @@ def analyze_segments_trend(fsegs, trend_pct=3.0, trend_bars=20):
     return results
 
 
+
+
+# =====================================================================
+# 箱体识别（基于分型，无趋势限制）
+# =====================================================================
+def find_boxes(fxs, bars, max_gap=15, max_adj_pct=0.030, max_same_pct=0.020,
+               min_fx=4, min_bars=15, min_h_pct=0.3, max_h_pct=4.0):
+    """
+    三条件贪心扩展识别箱体（不区分趋势方向）：
+      1. 距离相近：相邻分型K线间隔 <= max_gap
+      2. 相邻分型差值小：相邻顶-底/底-顶价格差 / 价格 < max_adj_pct
+      3. 同类型分型差值小：相邻顶-顶/底-底价格差 / 价格 < max_same_pct
+    箱体成立附加条件：
+      - 至少 min_fx 个分型、min_bars 根K线
+      - ZG=min(顶分型high) > ZD=max(底分型low)（有真实重叠）
+      - 箱体高度在 [min_h_pct, max_h_pct]% 之间
+    """
+    import bisect as _bt
+    dts = [b.dt for b in bars]
+
+    def _idx(dt):
+        return _bt.bisect_right(dts, dt) - 1
+
+    boxes = []
+    n = len(fxs)
+    i = 0
+    while i < n - 1:
+        members = [fxs[i]]
+        j = i + 1
+        while j < n:
+            prev, cur = fxs[j - 1], fxs[j]
+            # 条件1：距离相近
+            if _idx(cur.dt) - _idx(prev.dt) > max_gap:
+                break
+            base = (cur.high + cur.low) / 2
+            # 条件2：相邻分型差值
+            adj = abs(prev.high - cur.low) if prev.mark == "G" else abs(cur.high - prev.low)
+            if adj / base > max_adj_pct:
+                break
+            # 条件3：同类型分型差值
+            if j >= 2:
+                ps = fxs[j - 2]
+                if cur.mark == "G" and ps.mark == "G" and abs(cur.high - ps.high) / base > max_same_pct:
+                    break
+                if cur.mark == "D" and ps.mark == "D" and abs(cur.low - ps.low) / base > max_same_pct:
+                    break
+            members.append(cur)
+            j += 1
+        if len(members) >= min_fx:
+            tops = [m.high for m in members if m.mark == "G"]
+            bots = [m.low for m in members if m.mark == "D"]
+            if tops and bots:
+                zg, zd = min(tops), max(bots)          # 重叠核心区
+                gg = max(m.high for m in members)      # 箱体最高（含所有分型）
+                dd = min(m.low for m in members)       # 箱体最低（含所有分型）
+                nb = _idx(members[-1].dt) - _idx(members[0].dt) + 1
+                hp = (zg - zd) / ((zg + zd) / 2) * 100
+                full_hp = (gg - dd) / ((gg + dd) / 2) * 100
+                if zg > zd and nb >= min_bars and min_h_pct <= hp <= max_h_pct:
+                    boxes.append({
+                        "start": members[0].dt, "end": members[-1].dt,
+                        "zg": zg, "zd": zd, "gg": gg, "dd": dd,
+                        "n_fx": len(members), "bars": nb,
+                        "h_pct": hp, "full_h_pct": full_hp,
+                        "reason": f"{nb}根K线内{len(members)}分型，箱体[{dd:.1f},{gg:.1f}]重叠[{zd:.1f},{zg:.1f}]",
+                    })
+            i = j
+        else:
+            i += 1
+    return boxes
+
 # =====================================================================
 # 终端文本报告
 # =====================================================================
 def print_terminal(label, freq, sdt, edt, bars, prewarm, c):
-    fxs = c.fx_list
     bis_ = c.bi_list
+    _seen = set()
+    fxs = []
+    for _b in bis_:
+        for _fx in (_b.fx_a, _b.fx_b):
+            _k = (_fx.dt, _fx.mark)
+            if _k not in _seen:
+                _seen.add(_k)
+                fxs.append(_fx)
     segs = c.segments
     fsegs = [s for s in segs if s.finished]
     g_cnt = sum(1 for x in fxs if x.mark == "G")
@@ -203,7 +303,7 @@ def print_terminal(label, freq, sdt, edt, bars, prewarm, c):
           f"最新K线时间：{bars[-1].dt:%Y-%m-%d %H:%M}")
     print("-" * 64)
     print("[结构统计]")
-    print(f"  分型：{len(fxs)} 个（顶 {g_cnt} / 底 {d_cnt}，含笔内部分型）")
+    print(f"  分型：{len(fxs)} 个（顶 {g_cnt} / 底 {d_cnt}，笔端点分型）")
     print(f"  笔：{len(bis_)} 笔（向上 {up_cnt} / 向下 {dn_cnt}）")
     print(f"  线段：{len(fsegs)} 段已确认（向上 {useg_cnt} / 向下 {dseg_cnt}）"
           + (f"，另有 {len(segs) - len(fsegs)} 段未完成" if len(segs) > len(fsegs) else ""))
@@ -224,6 +324,16 @@ def print_terminal(label, freq, sdt, edt, bars, prewarm, c):
             mark = "  普通波动  "
         print(f"  {t['idx']:>2}. {mark}  {t['start_time']:%Y-%m-%d %H:%M} -> {t['end_time']:%Y-%m-%d %H:%M}"
               f"  {t['change_pct']:+.2f}%  {t['bar_count']}根  斜率{t['slope']:+.3f}%/根  | {t['reason']}")
+
+    # 箱体识别（fxs 已是笔端点分型）
+    boxes = find_boxes(fxs, bars)
+    print("-" * 64)
+    print(f"[箱体识别] 共 {len(boxes)} 个箱体（基于分型三条件，无趋势限制）")
+    print("  条件：相邻间隔<=15根、相邻分型差<3.0%、同类型差<2.0%；ZG>ZD，高度0.3%~4.0%")
+    for i, bx in enumerate(boxes, 1):
+        print(f"  {i:>2}. 箱体  {bx['start']:%Y-%m-%d %H:%M} -> {bx['end']:%Y-%m-%d %H:%M}"
+              f"  箱体[{bx['dd']:.1f},{bx['gg']:.1f}] 重叠[{bx['zd']:.1f},{bx['zg']:.1f}]"
+              f"  {bx['n_fx']}分型/{bx['bars']}根")
 
     print("-" * 64)
     print("[线段清单]（共 %d 段，已完成 %d 段）" % (len(segs), len(fsegs)))
@@ -372,7 +482,15 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c, out_path=None):
             f"<td>[{lo:.3f}, {hi:.3f}]</td><td>{len(b.bars)}</td><td>{diff:.3f}</td></tr>")
 
     fx_rows = []
-    fxs = c.fx_list  # 表格显示所有分型（含笔内部分型）
+    bis_ = c.bi_list
+    _seen = set()
+    fxs = []
+    for _b in bis_:
+        for _fx in (_b.fx_a, _b.fx_b):
+            _k = (_fx.dt, _fx.mark)
+            if _k not in _seen:
+                _seen.add(_k)
+                fxs.append(_fx)
     for i, fx in enumerate(fxs, 1):
         t = "顶分型" if fx.mark == "G" else "底分型"
         fx_rows.append(
@@ -384,9 +502,34 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c, out_path=None):
     d_cnt = sum(1 for x in fxs if x.mark == "D")
     up_cnt = sum(1 for b in bis_ if b.direction == "Up")
     dn_cnt = sum(1 for b in bis_ if b.direction == "Down")
-    
+
     useg_cnt = sum(1 for s in fsegs if s.direction == "Up")
     dseg_cnt = sum(1 for s in fsegs if s.direction == "Down")
+
+    # 箱体识别 + 图表矩形数据 + 表格行（fxs 已是笔端点分型）
+    boxes = find_boxes(fxs, bars)
+    box_rects = []      # 外框矩形 [si, ei, dd, gg]
+    box_cores = []      # 重叠核心带 [si, ei, zd, zg]
+    box_bounds = []     # GG/DD 虚线
+    box_rows = []
+    for i, bx in enumerate(boxes, 1):
+        si = _to_idx(bx["start"])
+        ei = _to_idx(bx["end"])
+        # 外框[DD,GG]包含所有分型；core[ZD,ZG]为重叠核心带
+        box_rects.append([si, ei, round(bx["dd"], 3), round(bx["gg"], 3)])
+        box_cores.append([si, ei, round(bx["zd"], 3), round(bx["zg"], 3)])
+        # GG/DD 外边界虚线
+        for lv in (bx["gg"], bx["dd"]):
+            box_bounds.append([si, round(lv, 3)])
+            box_bounds.append([ei, round(lv, 3)])
+            box_bounds.append(None)
+        box_rows.append(
+            f"<tr class='boxrow'><td>{i}</td>"
+            f"<td>{bx['start']:%Y-%m-%d %H:%M}</td><td>{bx['end']:%Y-%m-%d %H:%M}</td>"
+            f"<td>{bx['gg']:.3f}</td><td>{bx['dd']:.3f}</td>"
+            f"<td>{bx['zg']:.3f}</td><td>{bx['zd']:.3f}</td>"
+            f"<td>{bx['full_h_pct']:.2f}%</td><td>{bx['n_fx']}</td><td>{bx['bars']}</td>"
+            f"<td>{bx['reason']}</td></tr>")
 
     chart_h = 560 if n > 200 else 500
 
@@ -395,6 +538,7 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c, out_path=None):
         "kline": kline, "biLine": bi_line, "segLine": seg_line,
         "topFx": top_fx, "bottomFx": bottom_fx,
         "vols": vol_data, "trendAreas": trend_areas,
+        "boxRects": box_rects, "boxCores": box_cores, "boxBounds": box_bounds,
         "zoomStart": max(0, round((1 - 800.0 / max(n, 1)) * 100)),
     }
 
@@ -427,6 +571,8 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c, out_path=None):
     html = html.replace("__DNSEGS__", str(dseg_cnt))
     html = html.replace("__UNFINSEGS__",
                         "｜ 另有 1 段未完成" if len(segs) > len(fsegs) else "")
+    html = html.replace("__BOXCNT__", str(len(boxes)))
+    html = html.replace("__BOX_ROWS__", "".join(box_rows))
     html = html.replace("__TREND_ROWS__", "".join(trend_rows))
     html = html.replace("__SEG_ROWS__", "".join(seg_rows))
     html = html.replace("__BI_ROWS__", "".join(bi_rows))
