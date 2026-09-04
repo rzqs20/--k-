@@ -1,3 +1,0 @@
-import pandas as pd
-
-def weights_convert(weights_df: pd.DataFrame, rule: str = "t+1") -> pd.DataFrame: ...

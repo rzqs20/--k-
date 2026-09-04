@@ -59,9 +59,9 @@ table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
       <tr><th>#</th><th>分类</th><th>起始时间</th><th>结束时间</th><th>起始价</th><th>结束价</th><th>涨跌幅</th><th>持续K线</th><th>斜率%/根</th><th>判断依据</th></tr>
       __TREND_ROWS__
     </table>
-    <h2>箱体识别（基于分型，无趋势限制，共 __BOXCNT__ 个）</h2>
+    <h2>箱体识别（基于笔斜率，自适应周期，共 __BOXCNT__ 个）</h2>
     <table class="bi">
-      <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>ZG重叠上</th><th>ZD重叠下</th><th>箱体高度</th><th>分型数</th><th>K线数</th><th>判断依据</th></tr>
+      <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>ZG重叠上</th><th>ZD重叠下</th><th>箱体高度</th><th>笔数</th><th>K线数</th><th>判断依据</th></tr>
       __BOX_ROWS__
     </table>
     <h2>线段清单</h2>
@@ -206,70 +206,103 @@ def analyze_segments_trend(fsegs, trend_pct=3.0, trend_bars=20):
 # =====================================================================
 # 箱体识别（基于分型，无趋势限制）
 # =====================================================================
-def find_boxes(fxs, bars, max_gap=15, max_adj_pct=0.030, max_same_pct=0.020,
-               min_fx=4, min_bars=15, min_h_pct=0.3, max_h_pct=4.0):
+def find_boxes(fxs, bars, slope_quantile=0.6, chg_quantile=0.6, min_fx=4,
+               min_h_pct=0.5, max_h_pct=50.0):
     """
-    三条件贪心扩展识别箱体（不区分趋势方向）：
-      1. 距离相近：相邻分型K线间隔 <= max_gap
-      2. 相邻分型差值小：相邻顶-底/底-顶价格差 / 价格 < max_adj_pct
-      3. 同类型分型差值小：相邻顶-顶/底-底价格差 / 价格 < max_same_pct
-    箱体成立附加条件：
-      - 至少 min_fx 个分型、min_bars 根K线
-      - ZG=min(顶分型high) > ZD=max(底分型low)（有真实重叠）
-      - 箱体高度在 [min_h_pct, max_h_pct]% 之间
+    基于同类型分型斜率+绝对涨跌幅双条件的箱体识别：
+      1. 计算相邻顶/底分型之间的斜率(涨跌幅%/K线数) 和 绝对涨跌幅%
+      2. 两个阈值都取分位数自适应（默认前60%最平缓）
+      3. 分型"平缓"需同时满足：斜率<=斜率阈值 且 绝对涨跌幅<=涨跌幅阈值
+      4. 段首分型允许不满足（趋势终点），只要后面连续>=3个满足双条件
+      5. 扩展时实时检查重叠区(ZG>ZD)，一旦破坏则停止
+      6. 整体高度(GG-DD)在 [min_h_pct, max_h_pct]% → 成立
     """
     import bisect as _bt
     dts = [b.dt for b in bars]
-
     def _idx(dt):
         return _bt.bisect_right(dts, dt) - 1
 
+    tops = [fx for fx in fxs if fx.mark == "G"]
+    bots = [fx for fx in fxs if fx.mark == "D"]
+    if len(tops) < 2 or len(bots) < 2:
+        return []
+
+    slope_of = {}
+    chg_of = {}
+    for i in range(1, len(tops)):
+        dpct = abs(tops[i].high - tops[i-1].high) / ((tops[i].high+tops[i-1].high)/2) * 100
+        dn = max(1, _idx(tops[i].dt) - _idx(tops[i-1].dt))
+        slope_of[tops[i].dt] = dpct / dn
+        chg_of[tops[i].dt] = dpct
+    for i in range(1, len(bots)):
+        dpct = abs(bots[i].low - bots[i-1].low) / ((bots[i].low+bots[i-1].low)/2) * 100
+        dn = max(1, _idx(bots[i].dt) - _idx(bots[i-1].dt))
+        slope_of[bots[i].dt] = dpct / dn
+        chg_of[bots[i].dt] = dpct
+
+    all_slopes = sorted(slope_of.values())
+    all_chgs = sorted(chg_of.values())
+    slope_thr = all_slopes[int(len(all_slopes) * slope_quantile)] if all_slopes else 999
+    chg_thr = all_chgs[int(len(all_chgs) * chg_quantile)] if all_chgs else 999
+
+    def _ok(fx):
+        """双条件：斜率<=阈值 且 绝对涨跌幅<=阈值"""
+        if fx.dt not in slope_of:
+            return True
+        return slope_of[fx.dt] <= slope_thr and chg_of[fx.dt] <= chg_thr
+
+    def _overlap_ok(run):
+        t = [fx.high for fx in run if fx.mark == "G"]
+        b = [fx.low for fx in run if fx.mark == "D"]
+        if not t or not b:
+            return True
+        return min(t) > max(b)
+
     boxes = []
-    n = len(fxs)
     i = 0
-    while i < n - 1:
-        members = [fxs[i]]
-        j = i + 1
-        while j < n:
-            prev, cur = fxs[j - 1], fxs[j]
-            # 条件1：距离相近
-            if _idx(cur.dt) - _idx(prev.dt) > max_gap:
-                break
-            base = (cur.high + cur.low) / 2
-            # 条件2：相邻分型差值
-            adj = abs(prev.high - cur.low) if prev.mark == "G" else abs(cur.high - prev.low)
-            if adj / base > max_adj_pct:
-                break
-            # 条件3：同类型分型差值
-            if j >= 2:
-                ps = fxs[j - 2]
-                if cur.mark == "G" and ps.mark == "G" and abs(cur.high - ps.high) / base > max_same_pct:
-                    break
-                if cur.mark == "D" and ps.mark == "D" and abs(cur.low - ps.low) / base > max_same_pct:
-                    break
-            members.append(cur)
-            j += 1
-        if len(members) >= min_fx:
-            tops = [m.high for m in members if m.mark == "G"]
-            bots = [m.low for m in members if m.mark == "D"]
-            if tops and bots:
-                zg, zd = min(tops), max(bots)          # 重叠核心区
-                gg = max(m.high for m in members)      # 箱体最高（含所有分型）
-                dd = min(m.low for m in members)       # 箱体最低（含所有分型）
-                nb = _idx(members[-1].dt) - _idx(members[0].dt) + 1
-                hp = (zg - zd) / ((zg + zd) / 2) * 100
-                full_hp = (gg - dd) / ((gg + dd) / 2) * 100
-                if zg > zd and nb >= min_bars and min_h_pct <= hp <= max_h_pct:
-                    boxes.append({
-                        "start": members[0].dt, "end": members[-1].dt,
-                        "zg": zg, "zd": zd, "gg": gg, "dd": dd,
-                        "n_fx": len(members), "bars": nb,
-                        "h_pct": hp, "full_h_pct": full_hp,
-                        "reason": f"{nb}根K线内{len(members)}分型，箱体[{dd:.1f},{gg:.1f}]重叠[{zd:.1f},{zg:.1f}]",
-                    })
-            i = j
+    while i < len(fxs):
+        if _ok(fxs[i]):
+            start = i
         else:
-            i += 1
+            # 段首允许不满足（趋势终点），只要后面连续>=3个满足
+            k = i + 1
+            cnt = 0
+            while k < len(fxs) and _ok(fxs[k]):
+                cnt += 1
+                k += 1
+            if cnt >= 3:
+                start = i
+            else:
+                i += 1
+                continue
+
+        j = start + 1
+        while j < len(fxs):
+            if not _ok(fxs[j]):
+                break
+            if not _overlap_ok(fxs[start:j+1]):
+                break
+            j += 1
+        run = fxs[start:j]
+        n_top = sum(1 for fx in run if fx.mark == "G")
+        n_bot = sum(1 for fx in run if fx.mark == "D")
+        if len(run) >= min_fx and n_top >= 2 and n_bot >= 2:
+            gg = max(fx.high for fx in run)
+            dd = min(fx.low for fx in run)
+            full_hp = (gg - dd) / ((gg + dd) / 2) * 100
+            zg = min(fx.high for fx in run if fx.mark == "G")
+            zd = max(fx.low for fx in run if fx.mark == "D")
+            nb = _idx(run[-1].dt) - _idx(run[0].dt) + 1
+            hp = (zg - zd) / ((zg + zd) / 2) * 100 if zg > zd else 0
+            if min_h_pct <= full_hp <= max_h_pct and zg > zd:
+                boxes.append({
+                    "start": run[0].dt, "end": run[-1].dt,
+                    "zg": zg, "zd": zd, "gg": gg, "dd": dd,
+                    "n_fx": len(run), "n_bis": len(run) - 1,
+                    "bars": nb, "h_pct": hp, "full_h_pct": full_hp,
+                    "reason": f"{len(run)}分型双条件(斜率<={slope_thr:.3f}%/根,涨跌幅<={chg_thr:.1f}%)，全高{full_hp:.2f}%",
+                })
+        i = j if j > start else start + 1
     return boxes
 
 # =====================================================================
@@ -325,15 +358,15 @@ def print_terminal(label, freq, sdt, edt, bars, prewarm, c):
         print(f"  {t['idx']:>2}. {mark}  {t['start_time']:%Y-%m-%d %H:%M} -> {t['end_time']:%Y-%m-%d %H:%M}"
               f"  {t['change_pct']:+.2f}%  {t['bar_count']}根  斜率{t['slope']:+.3f}%/根  | {t['reason']}")
 
-    # 箱体识别（fxs 已是笔端点分型）
+    # 箱体识别（基于笔斜率，自适应周期）
     boxes = find_boxes(fxs, bars)
     print("-" * 64)
-    print(f"[箱体识别] 共 {len(boxes)} 个箱体（基于分型三条件，无趋势限制）")
-    print("  条件：相邻间隔<=15根、相邻分型差<3.0%、同类型差<2.0%；ZG>ZD，高度0.3%~4.0%")
+    print(f"[箱体识别] 共 {len(boxes)} 个箱体（基于笔斜率，自适应周期）")
+    print("  条件：连续>=4分型双条件(顶-顶/底-底斜率+绝对涨跌幅均<=前60%分位)，整体高度>=0.5%（不设上限）（自适应周期）")
     for i, bx in enumerate(boxes, 1):
         print(f"  {i:>2}. 箱体  {bx['start']:%Y-%m-%d %H:%M} -> {bx['end']:%Y-%m-%d %H:%M}"
               f"  箱体[{bx['dd']:.1f},{bx['gg']:.1f}] 重叠[{bx['zd']:.1f},{bx['zg']:.1f}]"
-              f"  {bx['n_fx']}分型/{bx['bars']}根")
+              f"  {bx['n_bis']}笔/{bx['bars']}根 全高{bx['full_h_pct']:.2f}%")
 
     print("-" * 64)
     print("[线段清单]（共 %d 段，已完成 %d 段）" % (len(segs), len(fsegs)))
@@ -506,7 +539,7 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c, out_path=None):
     useg_cnt = sum(1 for s in fsegs if s.direction == "Up")
     dseg_cnt = sum(1 for s in fsegs if s.direction == "Down")
 
-    # 箱体识别 + 图表矩形数据 + 表格行（fxs 已是笔端点分型）
+    # 箱体识别 + 图表矩形数据 + 表格行（基于笔斜率，自适应周期）
     boxes = find_boxes(fxs, bars)
     box_rects = []      # 外框矩形 [si, ei, dd, gg]
     box_cores = []      # 重叠核心带 [si, ei, zd, zg]
@@ -528,7 +561,7 @@ def render_html(label, freq, sdt, edt, bars, prewarm, c, out_path=None):
             f"<td>{bx['start']:%Y-%m-%d %H:%M}</td><td>{bx['end']:%Y-%m-%d %H:%M}</td>"
             f"<td>{bx['gg']:.3f}</td><td>{bx['dd']:.3f}</td>"
             f"<td>{bx['zg']:.3f}</td><td>{bx['zd']:.3f}</td>"
-            f"<td>{bx['full_h_pct']:.2f}%</td><td>{bx['n_fx']}</td><td>{bx['bars']}</td>"
+            f"<td>{bx['full_h_pct']:.2f}%</td><td>{bx['n_bis']}</td><td>{bx['bars']}</td>"
             f"<td>{bx['reason']}</td></tr>")
 
     chart_h = 560 if n > 200 else 500

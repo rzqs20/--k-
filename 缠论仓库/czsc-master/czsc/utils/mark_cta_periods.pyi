@@ -1,3 +1,0 @@
-import pandas as pd
-
-def mark_cta_periods(df: pd.DataFrame, **kwargs) -> pd.DataFrame: ...

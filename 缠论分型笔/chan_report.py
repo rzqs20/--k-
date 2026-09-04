@@ -212,7 +212,7 @@ def load_bars(code, exchange, freq, sdt, edt, prewarm_bars=600):
             if need not in tables:
                 raise RuntimeError(f"{code} 没有 {need} 数据")
             rows = con.execute(
-                f"SELECT time, open, high, low, close, volume, amount FROM {need} "
+                f"SELECT time, open_front, high_front, low_front, close_front, volume, amount FROM {need} "
                 f"WHERE time::DATE >= ? AND time::DATE <= ? ORDER BY time",
                 [sdt.date(), edt.date()]).fetchall()
             bars = [_mk_bar(f"{code}.{exchange}", freq, r[0], float(r[1]), float(r[4]),
@@ -225,7 +225,7 @@ def load_bars(code, exchange, freq, sdt, edt, prewarm_bars=600):
             if need not in tables:
                 raise RuntimeError(f"{code} 没有 {need} 数据")
             rows = con.execute(
-                f"SELECT time, open, high, low, close, volume, amount FROM {need} "
+                f"SELECT time, open_front, high_front, low_front, close_front, volume, amount FROM {need} "
                 f"WHERE time::DATE >= ? AND time::DATE <= ? ORDER BY time",
                 [sdt.date(), edt.date()]).fetchall()
             bars = [_mk_bar(f"{code}.{exchange}", freq, r[0], float(r[1]), float(r[4]),
@@ -236,7 +236,7 @@ def load_bars(code, exchange, freq, sdt, edt, prewarm_bars=600):
             if need not in tables:
                 raise RuntimeError(f"{code} 没有 {need} 数据")
             rows = con.execute(
-                f"SELECT time, open, high, low, close, volume, amount FROM {need} "
+                f"SELECT time, open_front, high_front, low_front, close_front, volume, amount FROM {need} "
                 f"WHERE time::DATE >= ? AND time::DATE <= ? ORDER BY time",
                 [sdt.date(), edt.date()]).fetchall()
             bars = [_mk_bar(f"{code}.{exchange}", freq, r[0], float(r[1]), float(r[4]),

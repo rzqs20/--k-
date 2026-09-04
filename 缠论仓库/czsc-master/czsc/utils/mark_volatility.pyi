@@ -1,3 +1,0 @@
-import pandas as pd
-
-def mark_volatility(df: pd.DataFrame, kind: str = "ts", **kwargs) -> pd.DataFrame: ...
