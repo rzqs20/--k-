@@ -11,7 +11,7 @@
 
 用法：
     from core.trend_finder import TrendFinder
-    tf = TrendFinder()
+    tf = TrendFinder(min_gap_bars=15, min_gap_pct=10.0)
     trends = tf.find(boxes, segments, bars)
 """
 import bisect
@@ -23,8 +23,9 @@ class TrendFinder:
     每根线段就是一个趋势，与箱体重叠的部分不标记。
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, min_gap_bars=15, min_gap_pct=10.0):
+        self.min_gap_bars = min_gap_bars
+        self.min_gap_pct = min_gap_pct
 
     def find(self, boxes, segments, bars):
         """
@@ -71,9 +72,9 @@ class TrendFinder:
                 gap_start = _idx(boxes[bi]["end"])
                 gap_end = _idx(boxes[bi + 1]["start"])
                 gap_bars = gap_end - gap_start
-                if gap_bars > 0 and gap_bars <= 15:
+                if gap_bars > 0 and gap_bars <= self.min_gap_bars:
                     gap_change = (bars[gap_end].close - bars[gap_start].close) / bars[gap_start].close * 100
-                    if abs(gap_change) <= 10:
+                    if abs(gap_change) <= self.min_gap_pct:
                         forbidden.append((gap_start, gap_end))
 
             # 找到与该线段有交集的禁止标记区

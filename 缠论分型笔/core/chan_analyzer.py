@@ -101,6 +101,7 @@ class ChanAnalyzer:
     # ------------------------------------------------------------------
     def analyze_segments_trend(self, trend_pct=3.0, trend_bars=20):
         """
+        [DEPRECATED] 旧版单根线段阈值法，已被 find_trends 替代。
         对每根已完成线段单独分析，根据涨幅和持续时间判断是否为大趋势线段。
 
         Parameters
@@ -178,13 +179,27 @@ class ChanAnalyzer:
     # ------------------------------------------------------------------
     # 趋势识别（代理方法）
     # ------------------------------------------------------------------
-    def find_trends(self, min_gap_bars=None):
+    def find_trends(self, min_gap_bars=None, min_gap_pct=None):
         """
         趋势识别（代理方法，实际逻辑在 TrendFinder 类中）。
-        基于箱体的趋势判断：趋势 = 两个箱体之间的突破行情。
+        基于箱体的趋势判断：每根线段=一个趋势，与箱体重叠的部分不标记。
         改趋势算法请编辑 core/trend_finder.py。
+
+        Parameters
+        ----------
+        min_gap_bars : int, optional
+            箱体之间短间隔的最大K线数（默认15）
+        min_gap_pct : float, optional
+            箱体之间短间隔的最大涨跌幅%（默认10.0）
         """
+        tf_kwargs = {}
         if min_gap_bars is not None:
-            self.trend_finder.min_gap_bars = min_gap_bars
+            tf_kwargs['min_gap_bars'] = min_gap_bars
+        if min_gap_pct is not None:
+            tf_kwargs['min_gap_pct'] = min_gap_pct
+        if tf_kwargs:
+            tf = TrendFinder(**tf_kwargs)
+        else:
+            tf = self.trend_finder
         boxes = self.box_finder.find(self.fxs, self.bars)
-        return self.trend_finder.find(boxes, self.segments, self.bars)
+        return tf.find(boxes, self.segments, self.bars)
