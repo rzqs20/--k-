@@ -9,6 +9,7 @@ import os
 
 from chan_report import load_bars, resolve_symbol, _parse_date, FREQ_ALIASES
 from core.chan_analyzer import ChanAnalyzer
+from core.report_renderer import ReportRenderer
 
 
 def main():
@@ -54,12 +55,13 @@ def main():
 
     # 创建分析器（内部自动做 K线合并→分型→笔→线段）
     ana = ChanAnalyzer(bars, symbol=label, freq=freq)
+    renderer = ReportRenderer(ana)
 
     # 终端输出
-    ana.print_terminal(sdt=sdt, edt=edt, prewarm=prewarm)
+    renderer.print_terminal(sdt=sdt, edt=edt, prewarm=prewarm)
 
     # HTML 报告
-    out_path = ana.render_html(sdt=sdt, edt=edt, prewarm=prewarm)
+    out_path = renderer.render_html(sdt=sdt, edt=edt, prewarm=prewarm)
     print("-" * 64)
     print(f"[HTML] 报告已生成：{out_path}")
 
