@@ -27,6 +27,7 @@ if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 
 from chan_report import cb
+from .box_finder import BoxFinder
 
 
 # =====================================================================
@@ -184,6 +185,8 @@ class ChanAnalyzer:
         self.czsc = cb.CZSC(bars, max_bi_num=max_bi_num, min_bi_len=min_bi_len)
         # 笔端点分型（与 chan_only.py 完全一致的提取逻辑）
         self.fxs = self._extract_bi_fxs()
+        # 箱体识别器（独立封装，改盘整算法只动 box_finder.py）
+        self.box_finder = BoxFinder()
 
     # ------------------------------------------------------------------
     # 基础属性
@@ -275,123 +278,25 @@ class ChanAnalyzer:
     # ------------------------------------------------------------------
     # 箱体识别
     # ------------------------------------------------------------------
-    def find_boxes(self, slope_quantile=0.6, chg_quantile=0.6, min_fx=4,
-                   min_h_pct=0.5, max_h_pct=50.0):
+    def find_boxes(self, slope_quantile=None, chg_quantile=None, min_fx=None,
+                   min_h_pct=None, max_h_pct=None):
         """
-        基于同类型分型斜率+绝对涨跌幅双条件的箱体识别。
-
-        逻辑：
-          1. 计算相邻顶/底分型之间的斜率(涨跌幅%/K线数) 和 绝对涨跌幅%
-          2. 两个阈值都取分位数自适应（默认前60%最平缓）
-          3. 分型"平缓"需同时满足：斜率<=斜率阈值 且 绝对涨跌幅<=涨跌幅阈值
-          4. 段首分型允许不满足（趋势终点），只要后面连续>=3个满足双条件
-          5. 扩展时实时检查重叠区(ZG>ZD)，一旦破坏则停止
-          6. 整体高度(GG-DD)在 [min_h_pct, max_h_pct]% → 成立
-
-        Parameters
-        ----------
-        slope_quantile : float
-            斜率分位数（0~1），越小越严格
-        chg_quantile : float
-            绝对涨跌幅分位数（0~1），越小越严格
-        min_fx : int
-            箱体最少分型数
-        min_h_pct : float
-            箱体最小全高（%）
-        max_h_pct : float
-            箱体最大全高（%）
-
-        Returns
-        -------
-        list[dict]
-            每个箱体含 start/end/zg/zd/gg/dd/n_fx/n_bis/bars/h_pct/full_h_pct/reason
+        箱体识别（代理方法，实际逻辑在 BoxFinder 类中）。
+        传参则临时覆盖 BoxFinder 的参数，不传则用 BoxFinder 默认参数。
+        改盘整算法请编辑 core/box_finder.py。
         """
-        dts = [b.dt for b in self.bars]
-
-        def _idx(dt):
-            return bisect.bisect_right(dts, dt) - 1
-
-        fxs = self.fxs
-        tops = [fx for fx in fxs if fx.mark == "G"]
-        bots = [fx for fx in fxs if fx.mark == "D"]
-        if len(tops) < 2 or len(bots) < 2:
-            return []
-
-        slope_of = {}
-        chg_of = {}
-        for i in range(1, len(tops)):
-            dpct = abs(tops[i].high - tops[i-1].high) / ((tops[i].high+tops[i-1].high)/2) * 100
-            dn = max(1, _idx(tops[i].dt) - _idx(tops[i-1].dt))
-            slope_of[tops[i].dt] = dpct / dn
-            chg_of[tops[i].dt] = dpct
-        for i in range(1, len(bots)):
-            dpct = abs(bots[i].low - bots[i-1].low) / ((bots[i].low+bots[i-1].low)/2) * 100
-            dn = max(1, _idx(bots[i].dt) - _idx(bots[i-1].dt))
-            slope_of[bots[i].dt] = dpct / dn
-            chg_of[bots[i].dt] = dpct
-
-        all_slopes = sorted(slope_of.values())
-        all_chgs = sorted(chg_of.values())
-        slope_thr = all_slopes[int(len(all_slopes) * slope_quantile)] if all_slopes else 999
-        chg_thr = all_chgs[int(len(all_chgs) * chg_quantile)] if all_chgs else 999
-
-        def _ok(fx):
-            if fx.dt not in slope_of:
-                return True
-            return slope_of[fx.dt] <= slope_thr and chg_of[fx.dt] <= chg_thr
-
-        def _overlap_ok(run):
-            t = [fx.high for fx in run if fx.mark == "G"]
-            b = [fx.low for fx in run if fx.mark == "D"]
-            if not t or not b:
-                return True
-            return min(t) > max(b)
-
-        boxes = []
-        i = 0
-        while i < len(fxs):
-            if _ok(fxs[i]):
-                start = i
-            else:
-                k = i + 1
-                cnt = 0
-                while k < len(fxs) and _ok(fxs[k]):
-                    cnt += 1
-                    k += 1
-                if cnt >= 3:
-                    start = i
-                else:
-                    i += 1
-                    continue
-
-            j = start + 1
-            while j < len(fxs):
-                if not _ok(fxs[j]):
-                    break
-                if not _overlap_ok(fxs[start:j+1]):
-                    break
-                j += 1
-            run = fxs[start:j]
-            n_top = sum(1 for fx in run if fx.mark == "G")
-            n_bot = sum(1 for fx in run if fx.mark == "D")
-            if len(run) >= min_fx and n_top >= 2 and n_bot >= 2:
-                gg = max(fx.high for fx in run)
-                dd = min(fx.low for fx in run)
-                full_hp = (gg - dd) / ((gg + dd) / 2) * 100
-                zg = min(fx.high for fx in run if fx.mark == "G")
-                zd = max(fx.low for fx in run if fx.mark == "D")
-                nb = _idx(run[-1].dt) - _idx(run[0].dt) + 1
-                hp = (zg - zd) / ((zg + zd) / 2) * 100 if zg > zd else 0
-                if min_h_pct <= full_hp <= max_h_pct and zg > zd:
-                    boxes.append({
-                        "start": run[0].dt, "end": run[-1].dt,
-                        "zg": zg, "zd": zd, "gg": gg, "dd": dd,
-                        "n_fx": len(run), "n_bis": len(run) - 1,
-                        "bars": nb, "h_pct": hp, "full_h_pct": full_hp,
-                        "reason": f"{len(run)}分型双条件(斜率<={slope_thr:.3f}%/根,涨跌幅<={chg_thr:.1f}%)，全高{full_hp:.2f}%",
-                    })
-            i = j if j > start else start + 1
-        return boxes
+        bf = self.box_finder
+        if slope_quantile is not None:
+            bf.slope_quantile = slope_quantile
+        if chg_quantile is not None:
+            bf.chg_quantile = chg_quantile
+        if min_fx is not None:
+            bf.min_fx = min_fx
+        if min_h_pct is not None:
+            bf.min_h_pct = min_h_pct
+        if max_h_pct is not None:
+            bf.max_h_pct = max_h_pct
+        return bf.find(self.fxs, self.bars)
 
     # ------------------------------------------------------------------
     # 终端文本报告
