@@ -119,6 +119,27 @@ class BoxFinder:
                     continue
 
             j = start + 1
+            # 第一步：先扩展到min_fx个分型
+            while j < len(fxs) and j - start < self.min_fx:
+                if not _ok(fxs[j]):
+                    break
+                if not _overlap_ok(fxs[start:j+1]):
+                    break
+                j += 1
+            # 第二步：如果够min_fx个，提前向后扩展1个分型（价格在当前区间内）
+            early_extended = 0
+            if j - start >= self.min_fx:
+                temp_run = fxs[start:j]
+                temp_gg = max(fx.high for fx in temp_run)
+                temp_dd = min(fx.low for fx in temp_run)
+                idx = start - 1
+                if idx >= 0:
+                    fx = fxs[idx]
+                    fx_price = fx.high if fx.mark == "G" else fx.low
+                    if temp_dd <= fx_price <= temp_gg:
+                        start = idx
+                        early_extended = 1
+            # 第三步：继续扩展run到最大
             while j < len(fxs):
                 if not _ok(fxs[j]):
                     break
@@ -168,7 +189,8 @@ class BoxFinder:
                             gg, dd, zg, zd = orig_gg, orig_dd, orig_zg, orig_zd
                             full_hp, hp, nb = orig_full_hp, orig_hp, orig_nb
                             extended_count = 0
-                    ext_note = f"，前扩{extended_count}分型" if extended_count > 0 else ""
+                    total_ext = extended_count + early_extended
+                    ext_note = f"，前扩{total_ext}分型" if total_ext > 0 else ""
                     boxes.append({
                         "start": run[0].dt, "end": run[-1].dt,
                         "zg": zg, "zd": zd, "gg": gg, "dd": dd,
