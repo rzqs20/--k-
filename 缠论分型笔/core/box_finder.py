@@ -137,12 +137,44 @@ class BoxFinder:
                 nb = _idx(run[-1].dt) - _idx(run[0].dt) + 1
                 hp = (zg - zd) / ((zg + zd) / 2) * 100 if zg > zd else 0
                 if self.min_h_pct <= full_hp <= self.max_h_pct and zg > zd:
+                    # 向前扩展：箱体起点前1-2个分型，价格在[DD,GG]内则加入
+                    orig_run = list(run)
+                    orig_gg, orig_dd, orig_zg, orig_zd = gg, dd, zg, zd
+                    orig_full_hp, orig_hp, orig_nb = full_hp, hp, nb
+                    extended_count = 0
+                    for back in range(1, 3):
+                        idx = start - back
+                        if idx < 0:
+                            break
+                        fx = fxs[idx]
+                        fx_price = fx.high if fx.mark == "G" else fx.low
+                        if dd <= fx_price <= gg:
+                            run.insert(0, fx)
+                            extended_count += 1
+                        else:
+                            break
+                    if extended_count > 0:
+                        # 重新计算边界
+                        gg = max(fx.high for fx in run)
+                        dd = min(fx.low for fx in run)
+                        full_hp = (gg - dd) / ((gg + dd) / 2) * 100
+                        zg = min(fx.high for fx in run if fx.mark == "G")
+                        zd = max(fx.low for fx in run if fx.mark == "D")
+                        nb = _idx(run[-1].dt) - _idx(run[0].dt) + 1
+                        hp = (zg - zd) / ((zg + zd) / 2) * 100 if zg > zd else 0
+                        # 扩展后不满足条件则回退
+                        if not (self.min_h_pct <= full_hp <= self.max_h_pct and zg > zd):
+                            run = orig_run
+                            gg, dd, zg, zd = orig_gg, orig_dd, orig_zg, orig_zd
+                            full_hp, hp, nb = orig_full_hp, orig_hp, orig_nb
+                            extended_count = 0
+                    ext_note = f"，前扩{extended_count}分型" if extended_count > 0 else ""
                     boxes.append({
                         "start": run[0].dt, "end": run[-1].dt,
                         "zg": zg, "zd": zd, "gg": gg, "dd": dd,
                         "n_fx": len(run), "n_bis": len(run) - 1,
                         "bars": nb, "h_pct": hp, "full_h_pct": full_hp,
-                        "reason": f"{len(run)}分型双条件(斜率<={slope_thr:.3f}%/根,涨跌幅<={chg_thr:.1f}%)，全高{full_hp:.2f}%",
+                        "reason": f"{len(run)}分型双条件(斜率<={slope_thr:.3f}%/根,涨跌幅<={chg_thr:.1f}%)，全高{full_hp:.2f}%{ext_note}",
                     })
             i = j if j > start else start + 1
         return boxes
