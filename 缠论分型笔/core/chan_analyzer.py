@@ -28,6 +28,7 @@ if _PARENT not in sys.path:
 
 from chan_report import cb
 from .box_finder import BoxFinder
+from .trend_finder import TrendFinder
 
 
 class ChanAnalyzer:
@@ -61,6 +62,8 @@ class ChanAnalyzer:
         self.fxs = self._extract_bi_fxs()
         # 箱体识别器（独立封装，改盘整算法只动 box_finder.py）
         self.box_finder = BoxFinder()
+        # 趋势识别器（独立封装，改趋势算法只动 trend_finder.py）
+        self.trend_finder = TrendFinder()
 
     # ------------------------------------------------------------------
     # 基础属性
@@ -171,3 +174,17 @@ class ChanAnalyzer:
         if max_h_pct is not None:
             bf.max_h_pct = max_h_pct
         return bf.find(self.fxs, self.bars)
+
+    # ------------------------------------------------------------------
+    # 趋势识别（代理方法）
+    # ------------------------------------------------------------------
+    def find_trends(self, min_gap_bars=None):
+        """
+        趋势识别（代理方法，实际逻辑在 TrendFinder 类中）。
+        基于箱体的趋势判断：趋势 = 两个箱体之间的突破行情。
+        改趋势算法请编辑 core/trend_finder.py。
+        """
+        if min_gap_bars is not None:
+            self.trend_finder.min_gap_bars = min_gap_bars
+        boxes = self.box_finder.find(self.fxs, self.bars)
+        return self.trend_finder.find(boxes, self.segments, self.bars)

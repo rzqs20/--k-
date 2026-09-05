@@ -56,7 +56,7 @@ table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
   </div>
   <div id="chart" style="width:100%;height:__CHART_H__px;"></div>
   <div class="report">
-    <h2>单根线段大趋势分析</h2>
+    <h2>趋势识别（箱体突破型，共 __TRENDCNT__ 段）</h2>
     <table class="bi">
       <tr><th>#</th><th>分类</th><th>起始时间</th><th>结束时间</th><th>起始价</th><th>结束价</th><th>涨跌幅</th><th>持续K线</th><th>斜率%/根</th><th>判断依据</th></tr>
       __TREND_ROWS__
@@ -189,20 +189,16 @@ class ReportRenderer:
               + (f"，另有 {len(segs) - len(fsegs)} 段未完成" if len(segs) > len(fsegs) else ""))
         print(f"  最后一笔延伸中：{'是' if ana.last_bi_extend else '否'}")
 
-        trends = ana.analyze_segments_trend(trend_pct, trend_bars)
-        trend_up = sum(1 for t in trends if t["trend_dir"] == "up")
-        trend_dn = sum(1 for t in trends if t["trend_dir"] == "down")
+        trends = ana.find_trends()
+        trend_up = sum(1 for t in trends if t["direction"] == "up")
+        trend_dn = sum(1 for t in trends if t["direction"] == "down")
         print("-" * 64)
-        print(f"[单根线段大趋势分析] 共 {len(trends)} 根已完成线段"
-              f"（大趋势上涨 {trend_up} / 大趋势下跌 {trend_dn} / 普通波动 {len(trends)-trend_up-trend_dn}）")
-        print(f"  阈值：涨幅>={trend_pct}% 且 持续>={trend_bars}根K线 → 大趋势线段")
+        print(f"[趋势识别] 共 {len(trends)} 段趋势（上涨 {trend_up} / 下跌 {trend_dn}）")
+        print(f"  逻辑：线段趋势（与箱体重叠的线段不标记）")
         for t in trends:
-            if t["is_trend"]:
-                mark = "★大趋势上涨" if t["trend_dir"] == "up" else "★大趋势下跌"
-            else:
-                mark = "  普通波动  "
+            mark = "★上涨趋势" if t["direction"] == "up" else "★下跌趋势"
             print(f"  {t['idx']:>2}. {mark}  {t['start_time']:%Y-%m-%d %H:%M} -> {t['end_time']:%Y-%m-%d %H:%M}"
-                  f"  {t['change_pct']:+.2f}%  {t['bar_count']}根  斜率{t['slope']:+.3f}%/根  | {t['reason']}")
+                  f"  {t['change_pct']:+.2f}%  {t['bar_count']}根  线段{t['seg_idx']}  | {t['reason']}")
 
         bp = box_params or {}
         boxes = ana.find_boxes(**bp)
@@ -295,37 +291,32 @@ class ReportRenderer:
                 else:
                     bottom_fx.append([_to_idx(fx.dt), round(fx.low, 3)])
 
-        trends = ana.analyze_segments_trend(trend_pct, trend_bars)
+        trends = ana.find_trends()
         trend_areas = []
         trend_rows = []
         for t in trends:
             si = _to_idx(t["start_time"])
             ei = _to_idx(t["end_time"])
-            if t["trend_dir"] == "up":
+            if t["direction"] == "up":
                 color = "rgba(224,80,62,0.10)"
                 border = "#e0503e"
-                cn = "★大趋势上涨"
+                cn = "★上涨趋势"
                 cls = "upseg"
-            elif t["trend_dir"] == "down":
+            else:
                 color = "rgba(26,154,90,0.10)"
                 border = "#1a9a5a"
-                cn = "★大趋势下跌"
+                cn = "★下跌趋势"
                 cls = "dnseg"
-            else:
-                color = None
-                cn = "普通波动"
-                cls = ""
-            if color is not None:
-                trend_areas.append([
-                    {"xAxis": si, "itemStyle": {"color": color, "borderColor": border, "borderWidth": 1}},
-                    {"xAxis": ei, "name": cn},
-                ])
+            trend_areas.append([
+                {"xAxis": si, "itemStyle": {"color": color, "borderColor": border, "borderWidth": 1}},
+                {"xAxis": ei, "name": cn},
+            ])
             trend_rows.append(
                 f"<tr class='{cls}'><td>{t['idx']}</td><td class='dir'>{cn}</td>"
                 f"<td>{t['start_time']:%Y-%m-%d %H:%M}</td><td>{t['end_time']:%Y-%m-%d %H:%M}</td>"
                 f"<td>{t['start_price']:.3f}</td><td>{t['end_price']:.3f}</td>"
                 f"<td>{t['change_pct']:+.2f}%</td><td>{t['bar_count']}</td>"
-                f"<td>{t['slope']:+.3f}</td><td>{t['reason']}</td></tr>")
+                f"<td>线段{t['seg_idx']}</td><td>{t['reason']}</td></tr>")
 
         seg_rows = []
         for i, seg in enumerate(segs, 1):
@@ -434,6 +425,7 @@ class ReportRenderer:
         html = html.replace("__DNSEGS__", str(dseg_cnt))
         html = html.replace("__UNFINSEGS__",
                             "｜ 另有 1 段未完成" if len(segs) > len(fsegs) else "")
+        html = html.replace("__TRENDCNT__", str(len(trends)))
         html = html.replace("__BOXCNT__", str(len(boxes)))
         html = html.replace("__BOX_ROWS__", "".join(box_rows))
         html = html.replace("__TREND_ROWS__", "".join(trend_rows))
