@@ -174,7 +174,7 @@ def _load_prewarm(db_path, first_bar, freq, n):
             if freq in ("15分钟", "30分钟", "60分钟", "120分钟"):
                 mult = max(mult, int(freq.replace("分钟", "")))
             rows = con.execute(
-                f"SELECT time, open, high, low, close, volume, amount FROM {table} "
+                f"SELECT time, open_front, high_front, low_front, close_front, volume, amount FROM {table} "
                 f"WHERE time < ? ORDER BY time DESC LIMIT ?",
                 [first_bar.dt, n * mult]).fetchall()
         finally:

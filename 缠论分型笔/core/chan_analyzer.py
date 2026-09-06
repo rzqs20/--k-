@@ -30,6 +30,8 @@ from chan_report import cb
 from .box_finder import BoxFinder
 from .trend_finder import TrendFinder
 from .daily_trend_classifier import DailyTrendClassifier
+from .box_quality_analyzer import BoxQualityAnalyzer
+from .secondary_breakout_analyzer import SecondaryBreakoutAnalyzer
 
 
 class ChanAnalyzer:
@@ -67,6 +69,10 @@ class ChanAnalyzer:
         self.trend_finder = TrendFinder()
         # 趋势分类器（独立封装，改分类逻辑只动 trend_classifier.py）
         self.trend_classifier = DailyTrendClassifier()
+        # 盘整质量分析器（独立封装，改质量算法只动 box_quality_analyzer.py）
+        self.box_quality_analyzer = BoxQualityAnalyzer()
+        # 二次突破分析器（第一次突破失败后监测二次突破）
+        self.secondary_breakout_analyzer = SecondaryBreakoutAnalyzer()
 
     # ------------------------------------------------------------------
     # 基础属性
@@ -177,7 +183,12 @@ class ChanAnalyzer:
             bf.min_h_pct = min_h_pct
         if max_h_pct is not None:
             bf.max_h_pct = max_h_pct
-        return bf.find(self.fxs, self.bars)
+        boxes = bf.find(self.fxs, self.bars)
+        # 先找趋势（用于成交量分析中的"前一段趋势"判断）
+        trends = self.find_trends()
+        # 自动调用盘整质量分析（标准度+成交量，带去极值），改算法请编辑 core/box_quality_analyzer.py
+        boxes = self.box_quality_analyzer.analyze(boxes, self.bars, fxs=self.fxs, trends=trends)
+        return boxes
 
     # ------------------------------------------------------------------
     # 趋势识别（代理方法）

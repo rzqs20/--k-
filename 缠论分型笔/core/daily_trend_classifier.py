@@ -106,47 +106,11 @@ class DailyTrendClassifier:
                     return data[f]
                 return data[f] + (data[c] - data[f]) * (k - f)
 
-            # === 盘整质量：收敛/发散 ===
-            # 把箱体内K线分成前后两半，比较振幅
-            half = n // 2
-            if half >= 3:
-                first_half = box_bars[:half]
-                second_half = box_bars[half:]
-                first_range = max(b.high for b in first_half) - min(b.low for b in first_half)
-                second_range = max(b.high for b in second_half) - min(b.low for b in second_half)
-                # 收敛比 = 后半段振幅 / 前半段振幅（<1=收敛，>1=发散）
-                conv_ratio = second_range / first_range if first_range > 0 else 1.0
-                # 成交量收敛比
-                first_vol = sum(b.vol for b in first_half) / len(first_half)
-                second_vol = sum(b.vol for b in second_half) / len(second_half)
-                vol_conv_ratio = second_vol / first_vol if first_vol > 0 else 1.0
-            else:
-                conv_ratio = 1.0
-                vol_conv_ratio = 1.0
-
-            # 收敛度评分
-            if conv_ratio < 0.7:
-                conv_score = 2
-                conv_label = "强收敛"
-            elif conv_ratio < 0.9:
-                conv_score = 1
-                conv_label = "弱收敛"
-            elif conv_ratio <= 1.1:
-                conv_score = 0
-                conv_label = "中性"
-            else:
-                conv_score = -1
-                conv_label = "发散"
-
             labeled = dict(box)
             labeled["p10"] = round(_percentile(closes, 10), 3)
             labeled["p50"] = round(_percentile(closes, 50), 3)
             labeled["p90"] = round(_percentile(closes, 90), 3)
             labeled["avg_volume"] = round(sum(volumes) / n, 0)
-            labeled["conv_ratio"] = round(conv_ratio, 3)
-            labeled["vol_conv_ratio"] = round(vol_conv_ratio, 3)
-            labeled["conv_score"] = conv_score
-            labeled["conv_label"] = conv_label
             result.append(labeled)
 
         return result

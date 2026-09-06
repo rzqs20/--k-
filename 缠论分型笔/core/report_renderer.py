@@ -63,7 +63,7 @@ table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
     </table>
     <h2>箱体识别（基于笔斜率，自适应周期，共 __BOXCNT__ 个）</h2>
     <table class="bi">
-      <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>P90压力</th><th>P10支撑</th><th>箱体高度</th><th>笔数</th><th>K线数</th><th>判断依据</th></tr>
+      <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>P90压力</th><th>P10支撑</th><th>箱体高度</th><th>笔数</th><th>K线数</th><th>量能</th><th>判断依据</th></tr>
       __BOX_ROWS__
     </table>
     <h2>突破监测（箱体结束后放量突破验证，共 __BREAKOUTCNT__ 个有效突破）</h2>
@@ -216,8 +216,11 @@ class ReportRenderer:
         print(f"[箱体识别] 共 {len(boxes)} 个箱体（基于笔斜率，自适应周期）")
         print("  条件：连续>=4分型双条件(顶-顶/底-底斜率+绝对涨跌幅均<=前60%分位)，整体高度>=0.5%（不设上限）（自适应周期）")
         for i, bx in enumerate(boxes, 1):
+            core_zg = bx.get("zg_trimmed", bx["zg"])
+            core_zd = bx.get("zd_trimmed", bx["zd"])
+            trimmed_mark = "*" if bx.get("trimmed", False) else ""
             print(f"  {i:>2}. 箱体  {bx['start']:%Y-%m-%d %H:%M} -> {bx['end']:%Y-%m-%d %H:%M}"
-                  f"  箱体[{bx['dd']:.1f},{bx['gg']:.1f}] 重叠[{bx['zd']:.1f},{bx['zg']:.1f}]"
+                  f"  箱体[{bx['dd']:.1f},{bx['gg']:.1f}] 重叠[{core_zd:.1f},{core_zg:.1f}]{trimmed_mark}"
                   f"  {bx['n_bis']}笔/{bx['bars']}根 全高{bx['full_h_pct']:.2f}%")
 
         print("-" * 64)
@@ -380,6 +383,8 @@ class ReportRenderer:
         # 箱体使用 classify 结果，计算内部价格分位和突破监测
         boxes_pct = ana.trend_classifier.calc_box_percentiles(boxes_labeled, bars)
         boxes = ana.trend_classifier.analyze_breakouts(boxes_pct, bars, segments=segs)
+        # 二次突破分析：第一次突破失败后，监测是否有二次突破（同向或反向）
+        boxes = ana.secondary_breakout_analyzer.analyze(boxes, bars)
         box_rects = []
         box_cores = []
         box_bounds = []
@@ -388,11 +393,23 @@ class ReportRenderer:
             si = _to_idx(bx["start"])
             ei = _to_idx(bx["end"])
             box_rects.append([si, ei, round(bx["dd"], 3), round(bx["gg"], 3)])
-            box_cores.append([si, ei, round(bx["zd"], 3), round(bx["zg"], 3)])
+            # 中枢线用去极值后的ZG/ZD（如果有的话）
+            core_zg = bx.get("zg_trimmed", bx["zg"])
+            core_zd = bx.get("zd_trimmed", bx["zd"])
+            box_cores.append([si, ei, round(core_zd, 3), round(core_zg, 3)])
             for lv in (bx["gg"], bx["dd"]):
                 box_bounds.append([si, round(lv, 3)])
                 box_bounds.append([ei, round(lv, 3)])
                 box_bounds.append(None)
+            # 量能标签颜色
+            vol_label = bx.get("vol_label", "数据不足")
+            vol_ratio = bx.get("vol_ratio", 1.0)
+            if "放量" in vol_label:
+                vol_color = "#e0503e"
+            elif "缩量" in vol_label:
+                vol_color = "#1a9a5a"
+            else:
+                vol_color = "#666"
             box_rows.append(
                 f"<tr class='boxrow'><td>{i}</td>"
                 f"<td>{bx['start']:%Y-%m-%d %H:%M}</td><td>{bx['end']:%Y-%m-%d %H:%M}</td>"
@@ -400,6 +417,7 @@ class ReportRenderer:
                 f"<td style='color:#e0503e'>{bx['p90']:.3f}</td>"
                 f"<td style='color:#1a9a5a'>{bx['p10']:.3f}</td>"
                 f"<td>{bx['full_h_pct']:.2f}%</td><td>{bx['n_bis']}</td><td>{bx['bars']}</td>"
+                f"<td style='color:{vol_color};font-weight:bold'>{vol_label}({vol_ratio:.2f})</td>"
                 f"<td>{bx['reason']}</td></tr>")
 
         # 突破监测表格（独立卡片）
@@ -455,24 +473,24 @@ class ReportRenderer:
             else:
                 pct_text = "-"
                 pct_color = "#999"
-            # 盘整质量
-            conv_label = bx.get("conv_label", "中性")
-            conv_score = bx.get("conv_score", 0)
-            conv_ratio = bx.get("conv_ratio", 1.0)
-            if conv_score >= 2:
-                conv_color = "#e0503e"
-            elif conv_score >= 1:
-                conv_color = "#faad14"
-            elif conv_score == 0:
-                conv_color = "#666"
+            # 盘整标准度（仅标签，不参与评分）
+            standard_label = bx.get("standard_label", "中性")
+            standard_score = bx.get("standard_score", 0)
+            standard_ratio = bx.get("standard_ratio", 0.0)
+            if standard_score >= 2:
+                standard_color = "#e0503e"
+            elif standard_score >= 1:
+                standard_color = "#faad14"
+            elif standard_score == 0:
+                standard_color = "#666"
             else:
-                conv_color = "#1a9a5a"
-            conv_text = f"{conv_label}({conv_score:+d})"
+                standard_color = "#1a9a5a"
+            standard_text = f"{standard_label}"
 
             breakout_rows.append(
                 f"<tr class='{status_cls}'><td>{i}</td>"
                 f"<td>{bx['start']:%Y-%m-%d} ~ {bx['end']:%Y-%m-%d}</td>"
-                f"<td style='color:{conv_color};font-weight:bold'>{conv_text}</td>"
+                f"<td style='color:{standard_color};font-weight:bold'>{standard_text}</td>"
                 f"<td style='color:{dir_color};font-weight:bold'>{dir_text}</td>"
                 f"<td>{obs_time}</td>"
                 f"<td style='color:{obs_vol_color};font-weight:bold'>{obs_vol_text}</td>"

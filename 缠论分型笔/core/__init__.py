@@ -6,4 +6,7 @@ from .trend_finder import TrendFinder
 from .daily_trend_classifier import DailyTrendClassifier
 from .report_renderer import ReportRenderer
 
-__all__ = ["ChanAnalyzer", "BoxFinder", "TrendFinder", "DailyTrendClassifier", "ReportRenderer"]
+from .box_quality_analyzer import BoxQualityAnalyzer
+from .secondary_breakout_analyzer import SecondaryBreakoutAnalyzer
+
+__all__ = ["ChanAnalyzer", "BoxFinder", "TrendFinder", "DailyTrendClassifier", "ReportRenderer", "BoxQualityAnalyzer", "SecondaryBreakoutAnalyzer"]
