@@ -29,6 +29,7 @@ if _PARENT not in sys.path:
 from chan_report import cb
 from .box_finder import BoxFinder
 from .trend_finder import TrendFinder
+from .daily_trend_classifier import DailyTrendClassifier
 
 
 class ChanAnalyzer:
@@ -64,6 +65,8 @@ class ChanAnalyzer:
         self.box_finder = BoxFinder()
         # 趋势识别器（独立封装，改趋势算法只动 trend_finder.py）
         self.trend_finder = TrendFinder()
+        # 趋势分类器（独立封装，改分类逻辑只动 trend_classifier.py）
+        self.trend_classifier = DailyTrendClassifier()
 
     # ------------------------------------------------------------------
     # 基础属性
@@ -203,3 +206,30 @@ class ChanAnalyzer:
             tf = self.trend_finder
         boxes = self.box_finder.find(self.fxs, self.bars)
         return tf.find(boxes, self.segments, self.bars)
+
+    # ------------------------------------------------------------------
+    # 趋势分类（代理方法）
+    # ------------------------------------------------------------------
+    def classify(self, boxes=None, trends=None):
+        """
+        对箱体和趋势进行多维度分类。
+
+        Parameters
+        ----------
+        boxes : list[dict], optional
+            箱体列表，不传则自动调用 find_boxes()
+        trends : list[dict], optional
+            趋势列表，不传则自动调用 find_trends()
+
+        Returns
+        -------
+        dict
+            含 "boxes"（带位置标签的箱体列表）和 "trends"（带分类标签的趋势列表）
+        """
+        if boxes is None:
+            boxes = self.find_boxes()
+        if trends is None:
+            trends = self.find_trends()
+        labeled_boxes = self.trend_classifier.classify_boxes(boxes, self.bars)
+        labeled_trends = self.trend_classifier.classify_trends(trends, boxes, self.bars)
+        return {"boxes": labeled_boxes, "trends": labeled_trends}

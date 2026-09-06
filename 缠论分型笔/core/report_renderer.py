@@ -58,13 +58,23 @@ table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
   <div class="report">
     <h2>趋势识别（箱体突破型，共 __TRENDCNT__ 段）</h2>
     <table class="bi">
-      <tr><th>#</th><th>分类</th><th>起始时间</th><th>结束时间</th><th>起始价</th><th>结束价</th><th>涨跌幅</th><th>持续K线</th><th>斜率%/根</th><th>判断依据</th></tr>
+      <tr><th>#</th><th>方向</th><th>分类标签</th><th>起始时间</th><th>结束时间</th><th>起始价</th><th>结束价</th><th>涨跌幅</th><th>持续K线</th><th>判断依据</th></tr>
       __TREND_ROWS__
     </table>
     <h2>箱体识别（基于笔斜率，自适应周期，共 __BOXCNT__ 个）</h2>
     <table class="bi">
-      <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>ZG重叠上</th><th>ZD重叠下</th><th>箱体高度</th><th>笔数</th><th>K线数</th><th>判断依据</th></tr>
+      <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>P90压力</th><th>P10支撑</th><th>箱体高度</th><th>笔数</th><th>K线数</th><th>判断依据</th></tr>
       __BOX_ROWS__
+    </table>
+    <h2>突破监测（箱体结束后放量突破验证，共 __BREAKOUTCNT__ 个有效突破）</h2>
+    <table class="bi">
+      <tr><th>#</th><th>箱体</th><th>盘整质量</th><th>方向</th><th>观察日(T)</th><th>观察量%</th><th>突破日</th><th>突破量%</th><th>突破价</th><th>得分</th><th>突破后涨跌</th><th>涨幅终点</th><th>状态</th><th>详情</th></tr>
+      __BREAKOUT_ROWS__
+    </table>
+    <h3>评分变化明细（逐日动态评分）</h3>
+    <table class="bi">
+      <tr><th>箱体</th><th>日期</th><th>T+n</th><th>收盘价</th><th>当日量%</th><th>均量%</th><th>时间分</th><th>量能分</th><th>当日量分</th><th>稳步分</th><th>总分</th><th>状态</th></tr>
+      __SCORE_HISTORY_ROWS__
     </table>
     <h2>线段清单</h2>
     <table class="bi">
@@ -291,7 +301,10 @@ class ReportRenderer:
                 else:
                     bottom_fx.append([_to_idx(fx.dt), round(fx.low, 3)])
 
-        trends = ana.find_trends()
+        # 调用分类器，获取带标签的箱体和趋势
+        classified = ana.classify()
+        trends = classified["trends"]
+        boxes_labeled = classified["boxes"]
         trend_areas = []
         trend_rows = []
         for t in trends:
@@ -300,23 +313,25 @@ class ReportRenderer:
             if t["direction"] == "up":
                 color = "rgba(224,80,62,0.10)"
                 border = "#e0503e"
-                cn = "★上涨趋势"
+                cn = "★上涨"
                 cls = "upseg"
             else:
                 color = "rgba(26,154,90,0.10)"
                 border = "#1a9a5a"
-                cn = "★下跌趋势"
+                cn = "★下跌"
                 cls = "dnseg"
             trend_areas.append([
                 {"xAxis": si, "itemStyle": {"color": color, "borderColor": border, "borderWidth": 1}},
                 {"xAxis": ei, "name": cn},
             ])
+            label = t.get("label", "-")
             trend_rows.append(
                 f"<tr class='{cls}'><td>{t['idx']}</td><td class='dir'>{cn}</td>"
+                f"<td style='font-size:11px;color:#555'>{label}</td>"
                 f"<td>{t['start_time']:%Y-%m-%d %H:%M}</td><td>{t['end_time']:%Y-%m-%d %H:%M}</td>"
                 f"<td>{t['start_price']:.3f}</td><td>{t['end_price']:.3f}</td>"
                 f"<td>{t['change_pct']:+.2f}%</td><td>{t['bar_count']}</td>"
-                f"<td>线段{t['seg_idx']}</td><td>{t['reason']}</td></tr>")
+                f"<td>{t['reason']}</td></tr>")
 
         seg_rows = []
         for i, seg in enumerate(segs, 1):
@@ -362,8 +377,9 @@ class ReportRenderer:
         useg_cnt = sum(1 for s in fsegs if s.direction == "Up")
         dseg_cnt = sum(1 for s in fsegs if s.direction == "Down")
 
-        bp = box_params or {}
-        boxes = ana.find_boxes(**bp)
+        # 箱体使用 classify 结果，计算内部价格分位和突破监测
+        boxes_pct = ana.trend_classifier.calc_box_percentiles(boxes_labeled, bars)
+        boxes = ana.trend_classifier.analyze_breakouts(boxes_pct, bars, segments=segs)
         box_rects = []
         box_cores = []
         box_bounds = []
@@ -381,9 +397,123 @@ class ReportRenderer:
                 f"<tr class='boxrow'><td>{i}</td>"
                 f"<td>{bx['start']:%Y-%m-%d %H:%M}</td><td>{bx['end']:%Y-%m-%d %H:%M}</td>"
                 f"<td>{bx['gg']:.3f}</td><td>{bx['dd']:.3f}</td>"
-                f"<td>{bx['zg']:.3f}</td><td>{bx['zd']:.3f}</td>"
+                f"<td style='color:#e0503e'>{bx['p90']:.3f}</td>"
+                f"<td style='color:#1a9a5a'>{bx['p10']:.3f}</td>"
                 f"<td>{bx['full_h_pct']:.2f}%</td><td>{bx['n_bis']}</td><td>{bx['bars']}</td>"
                 f"<td>{bx['reason']}</td></tr>")
+
+        # 突破监测表格（独立卡片）
+        breakout_rows = []
+        breakout_cnt = 0
+        for i, bx in enumerate(boxes, 1):
+            bo = bx.get("breakout", {})
+            bo_dir = bo.get("direction", "none")
+            bo_status = bo.get("status", "-")
+            if bo_status in ("放量突破", "无量突破", "缩量突破"):
+                breakout_cnt += 1
+                if bo_status == "放量突破":
+                    status_color = "#e0503e" if bo_dir == "up" else "#1a9a5a"
+                    status_cls = "upseg" if bo_dir == "up" else "dnseg"
+                elif bo_status == "无量突破":
+                    status_color = "#faad14"
+                    status_cls = ""
+                else:  # 缩量突破
+                    status_color = "#999"
+                    status_cls = ""
+            else:  # 突破失败/未突破
+                status_color = "#999"
+                status_cls = ""
+
+            if bo_dir == "up":
+                dir_text = "↑向上"
+                dir_color = "#e0503e"
+            elif bo_dir == "down":
+                dir_text = "↓向下"
+                dir_color = "#1a9a5a"
+            else:
+                dir_text = "无"
+                dir_color = "#999"
+
+            obs_time = bo['observe_time'].strftime("%Y-%m-%d") if bo.get('observe_time') else "-"
+            obs_vol_pct = bo.get('observe_vol_pct', 0)
+            obs_vol_text = f"{obs_vol_pct:.0f}%" if obs_vol_pct > 0 else "-"
+            obs_vol_color = "#e0503e" if obs_vol_pct >= 70 else "#1a9a5a" if obs_vol_pct <= 30 else "#666"
+
+            bo_time = bo['breakout_time'].strftime("%Y-%m-%d") if bo.get('breakout_time') else "-"
+            bo_price = f"{bo['breakout_price']:.2f}" if bo.get('breakout_price') else "-"
+            bo_vol_pct = bo.get('breakout_vol_pct', 0)
+            bo_vol_text = f"{bo_vol_pct:.0f}%" if bo_vol_pct > 0 else "-"
+            bo_vol_color = "#e0503e" if bo_vol_pct >= 70 else "#1a9a5a" if bo_vol_pct <= 30 else "#666"
+
+            bo_pct = bo.get("breakout_pct", 0)
+            if bo_pct > 0:
+                pct_text = f"+{bo_pct:.2f}%"
+                pct_color = "#e0503e"
+            elif bo_pct < 0:
+                pct_text = f"{bo_pct:.2f}%"
+                pct_color = "#1a9a5a"
+            else:
+                pct_text = "-"
+                pct_color = "#999"
+            # 盘整质量
+            conv_label = bx.get("conv_label", "中性")
+            conv_score = bx.get("conv_score", 0)
+            conv_ratio = bx.get("conv_ratio", 1.0)
+            if conv_score >= 2:
+                conv_color = "#e0503e"
+            elif conv_score >= 1:
+                conv_color = "#faad14"
+            elif conv_score == 0:
+                conv_color = "#666"
+            else:
+                conv_color = "#1a9a5a"
+            conv_text = f"{conv_label}({conv_score:+d})"
+
+            breakout_rows.append(
+                f"<tr class='{status_cls}'><td>{i}</td>"
+                f"<td>{bx['start']:%Y-%m-%d} ~ {bx['end']:%Y-%m-%d}</td>"
+                f"<td style='color:{conv_color};font-weight:bold'>{conv_text}</td>"
+                f"<td style='color:{dir_color};font-weight:bold'>{dir_text}</td>"
+                f"<td>{obs_time}</td>"
+                f"<td style='color:{obs_vol_color};font-weight:bold'>{obs_vol_text}</td>"
+                f"<td>{bo_time}</td>"
+                f"<td style='color:{bo_vol_color};font-weight:bold'>{bo_vol_text}</td>"
+                f"<td>{bo_price}</td>"
+                f"<td style='font-weight:bold;color:{'#e0503e' if bo.get('score', 0) >= 5 else '#faad14' if bo.get('score', 0) >= 3 else '#999'}'>{bo.get('score', 0)}</td>"
+                f"<td style='color:{pct_color};font-weight:bold'>{pct_text}</td>"
+                f"<td>{bo.get('breakout_end_time').strftime('%Y-%m-%d') if bo.get('breakout_end_time') else '-'}</td>"
+                f"<td style='color:{status_color};font-weight:bold'>{bo_status}</td>"
+                f"<td style='font-size:11px;color:#666'>{bo['detail']}</td></tr>")
+
+        # 评分历史明细
+        score_history_rows = []
+        for i, bx in enumerate(boxes, 1):
+            bo = bx.get("breakout", {})
+            history = bo.get("score_history", [])
+            for h in history:
+                note = h.get("note", "")
+                total = h["total"]
+                if total >= 5:
+                    total_color = "#e0503e"
+                elif total >= 3:
+                    total_color = "#faad14"
+                elif total >= 0:
+                    total_color = "#666"
+                else:
+                    total_color = "#1a9a5a"
+                score_history_rows.append(
+                    f"<tr><td>{i}</td>"
+                    f"<td>{h['date'].strftime('%Y-%m-%d')}</td>"
+                    f"<td>T+{h['day']}</td>"
+                    f"<td>{h['close']:.2f}</td>"
+                    f"<td>{h['vol_pct']:.0f}%</td>"
+                    f"<td>{h['avg_vol_pct']:.0f}%</td>"
+                    f"<td>{h['time_score']}</td>"
+                    f"<td>{h['vol_score']:+d}</td>"
+                    f"<td>{h['day_vol_score']}</td>"
+                    f"<td>{h['steady_score']}</td>"
+                    f"<td style='font-weight:bold;color:{total_color}'>{total}</td>"
+                    f"<td style='font-size:11px;color:#666'>{note}</td></tr>")
 
         chart_h = 560 if n > 200 else 500
 
@@ -428,6 +558,9 @@ class ReportRenderer:
         html = html.replace("__TRENDCNT__", str(len(trends)))
         html = html.replace("__BOXCNT__", str(len(boxes)))
         html = html.replace("__BOX_ROWS__", "".join(box_rows))
+        html = html.replace("__BREAKOUT_ROWS__", "".join(breakout_rows))
+        html = html.replace("__SCORE_HISTORY_ROWS__", "".join(score_history_rows))
+        html = html.replace("__BREAKOUTCNT__", str(breakout_cnt))
         html = html.replace("__TREND_ROWS__", "".join(trend_rows))
         html = html.replace("__SEG_ROWS__", "".join(seg_rows))
         html = html.replace("__BI_ROWS__", "".join(bi_rows))

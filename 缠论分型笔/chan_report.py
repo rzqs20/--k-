@@ -73,7 +73,8 @@ FREQ_ALIASES = {
 
 
 def _mk_bar(symbol, freq, dt, o, c, h, l, v, a, id_=0):
-    return cb.RawBar(symbol, dt, o, c, h, l, v, a, id_, freq)
+    # vol 统一使用成交额（amount），避免数据源成交量单位不一致的问题
+    return cb.RawBar(symbol, dt, o, c, h, l, a, a, id_, freq)
 
 
 def resolve_symbol(code):

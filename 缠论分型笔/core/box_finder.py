@@ -126,17 +126,27 @@ class BoxFinder:
                 if not _overlap_ok(fxs[start:j+1]):
                     break
                 j += 1
-            # 第二步：如果够min_fx个，提前向后扩展1个分型（价格在当前区间内）
+            # 第二步：如果够min_fx个，提前向后扩展1个分型（按分型类型判断上下半区）
             early_extended = 0
             if j - start >= self.min_fx:
                 temp_run = fxs[start:j]
                 temp_gg = max(fx.high for fx in temp_run)
                 temp_dd = min(fx.low for fx in temp_run)
+                temp_mid = (temp_gg + temp_dd) / 2
                 idx = start - 1
                 if idx >= 0:
                     fx = fxs[idx]
                     fx_price = fx.high if fx.mark == "G" else fx.low
-                    if temp_dd <= fx_price <= temp_gg:
+                    # 前一个分型(run[0])是顶分型→当前是底分型→应在下半区[DD,mid]
+                    # 前一个分型是底分型→当前是顶分型→应在上半区[mid,GG]
+                    first_fx = temp_run[0]
+                    if first_fx.mark == "G":
+                        # 当前是底分型，应在下半区
+                        in_half = temp_dd <= fx_price <= temp_mid
+                    else:
+                        # 当前是顶分型，应在上半区
+                        in_half = temp_mid <= fx_price <= temp_gg
+                    if in_half:
                         start = idx
                         early_extended = 1
             # 第三步：继续扩展run到最大
@@ -158,18 +168,26 @@ class BoxFinder:
                 nb = _idx(run[-1].dt) - _idx(run[0].dt) + 1
                 hp = (zg - zd) / ((zg + zd) / 2) * 100 if zg > zd else 0
                 if self.min_h_pct <= full_hp <= self.max_h_pct and zg > zd:
-                    # 向前扩展：箱体起点前1-2个分型，价格在[DD,GG]内则加入
+                    # 向前扩展：箱体起点前1-2个分型，按分型类型判断上下半区
                     orig_run = list(run)
                     orig_gg, orig_dd, orig_zg, orig_zd = gg, dd, zg, zd
                     orig_full_hp, orig_hp, orig_nb = full_hp, hp, nb
                     extended_count = 0
+                    final_mid = (gg + dd) / 2
                     for back in range(1, 3):
                         idx = start - back
                         if idx < 0:
                             break
                         fx = fxs[idx]
                         fx_price = fx.high if fx.mark == "G" else fx.low
-                        if dd <= fx_price <= gg:
+                        # 前一个分型(run[0])是顶分型→当前是底分型→应在下半区[DD,mid]
+                        # 前一个分型是底分型→当前是顶分型→应在上半区[mid,GG]
+                        first_fx = run[0]
+                        if first_fx.mark == "G":
+                            in_half = dd <= fx_price <= final_mid
+                        else:
+                            in_half = final_mid <= fx_price <= gg
+                        if in_half:
                             run.insert(0, fx)
                             extended_count += 1
                         else:
