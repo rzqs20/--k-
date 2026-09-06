@@ -32,6 +32,7 @@ from .trend_finder import TrendFinder
 from .daily_trend_classifier import DailyTrendClassifier
 from .box_quality_analyzer import BoxQualityAnalyzer
 from .secondary_breakout_analyzer import SecondaryBreakoutAnalyzer
+from .unified_breakout_analyzer import UnifiedBreakoutAnalyzer
 
 
 class ChanAnalyzer:
@@ -73,6 +74,8 @@ class ChanAnalyzer:
         self.box_quality_analyzer = BoxQualityAnalyzer()
         # 二次突破分析器（第一次突破失败后监测二次突破）
         self.secondary_breakout_analyzer = SecondaryBreakoutAnalyzer()
+        # 统一突破分析器（多次尝试循环，直到成功或新箱体）
+        self.unified_breakout_analyzer = UnifiedBreakoutAnalyzer()
 
     # ------------------------------------------------------------------
     # 基础属性

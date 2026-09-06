@@ -8,5 +8,6 @@ from .report_renderer import ReportRenderer
 
 from .box_quality_analyzer import BoxQualityAnalyzer
 from .secondary_breakout_analyzer import SecondaryBreakoutAnalyzer
+from .unified_breakout_analyzer import UnifiedBreakoutAnalyzer
 
-__all__ = ["ChanAnalyzer", "BoxFinder", "TrendFinder", "DailyTrendClassifier", "ReportRenderer", "BoxQualityAnalyzer", "SecondaryBreakoutAnalyzer"]
+__all__ = ["ChanAnalyzer", "BoxFinder", "TrendFinder", "DailyTrendClassifier", "ReportRenderer", "BoxQualityAnalyzer", "SecondaryBreakoutAnalyzer", "UnifiedBreakoutAnalyzer"]

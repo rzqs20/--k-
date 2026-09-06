@@ -66,10 +66,15 @@ table.bi tr.dnseg td.dir{color:#7b1fa2;font-weight:bold}
       <tr><th>#</th><th>起始时间</th><th>结束时间</th><th>GG最高</th><th>DD最低</th><th>P90压力</th><th>P10支撑</th><th>箱体高度</th><th>笔数</th><th>K线数</th><th>量能</th><th>判断依据</th></tr>
       __BOX_ROWS__
     </table>
-    <h2>突破监测（箱体结束后放量突破验证，共 __BREAKOUTCNT__ 个有效突破）</h2>
+    <h2>突破监测（统一突破分析，多次尝试直到成功或新箱体，共 __BREAKOUTCNT__ 个成功突破）</h2>
     <table class="bi">
-      <tr><th>#</th><th>箱体</th><th>盘整质量</th><th>方向</th><th>观察日(T)</th><th>观察量%</th><th>突破日</th><th>突破量%</th><th>突破价</th><th>得分</th><th>突破后涨跌</th><th>涨幅终点</th><th>状态</th><th>详情</th></tr>
+      <tr><th>#</th><th>箱体</th><th>盘整质量</th><th>尝试次数</th><th>最终方向</th><th>最终观察日</th><th>最终突破日</th><th>得分</th><th>突破后涨跌</th><th>最终状态</th><th>详情</th></tr>
       __BREAKOUT_ROWS__
+    </table>
+    <h3>突破尝试历史（每次尝试的详细情况）</h3>
+    <table class="bi">
+      <tr><th>箱体</th><th>第几次</th><th>观察日</th><th>方向</th><th>观察价</th><th>观察量%</th><th>状态</th><th>突破日/失败日</th><th>价格</th><th>得分</th><th>详情</th></tr>
+      __ATTEMPT_HISTORY_ROWS__
     </table>
     <h3>评分变化明细（逐日动态评分）</h3>
     <table class="bi">
@@ -383,8 +388,8 @@ class ReportRenderer:
         # 箱体使用 classify 结果，计算内部价格分位和突破监测
         boxes_pct = ana.trend_classifier.calc_box_percentiles(boxes_labeled, bars)
         boxes = ana.trend_classifier.analyze_breakouts(boxes_pct, bars, segments=segs)
-        # 二次突破分析：第一次突破失败后，监测是否有二次突破（同向或反向）
-        boxes = ana.secondary_breakout_analyzer.analyze(boxes, bars)
+        # 统一突破分析：多次尝试循环，直到突破成功或遇到新箱体
+        boxes = ana.unified_breakout_analyzer.analyze(boxes, bars, segments=segs)
         box_rects = []
         box_cores = []
         box_bounds = []
@@ -420,63 +425,51 @@ class ReportRenderer:
                 f"<td style='color:{vol_color};font-weight:bold'>{vol_label}({vol_ratio:.2f})</td>"
                 f"<td>{bx['reason']}</td></tr>")
 
-        # 突破监测表格（独立卡片）
+        # 突破监测表格（统一突破分析）
         breakout_rows = []
+        attempt_history_rows = []
         breakout_cnt = 0
         for i, bx in enumerate(boxes, 1):
-            bo = bx.get("breakout", {})
-            bo_dir = bo.get("direction", "none")
-            bo_status = bo.get("status", "-")
-            if bo_status in ("放量突破", "无量突破", "缩量突破"):
+            ub = bx.get("unified_breakout", {})
+            attempts = ub.get("attempts", [])
+            success = ub.get("success", False)
+            if success:
                 breakout_cnt += 1
-                if bo_status == "放量突破":
-                    status_color = "#e0503e" if bo_dir == "up" else "#1a9a5a"
-                    status_cls = "upseg" if bo_dir == "up" else "dnseg"
-                elif bo_status == "无量突破":
-                    status_color = "#faad14"
-                    status_cls = ""
-                else:  # 缩量突破
-                    status_color = "#999"
-                    status_cls = ""
-            else:  # 突破失败/未突破
+                status_color = "#e0503e" if ub.get("final_direction") == "up" else "#1a9a5a"
+                status_cls = "upseg" if ub.get("final_direction") == "up" else "dnseg"
+            else:
                 status_color = "#999"
                 status_cls = ""
 
-            if bo_dir == "up":
+            final_dir = ub.get("final_direction", "none")
+            if final_dir == "up":
                 dir_text = "↑向上"
                 dir_color = "#e0503e"
-            elif bo_dir == "down":
+            elif final_dir == "down":
                 dir_text = "↓向下"
                 dir_color = "#1a9a5a"
             else:
                 dir_text = "无"
                 dir_color = "#999"
 
-            obs_time = bo['observe_time'].strftime("%Y-%m-%d") if bo.get('observe_time') else "-"
-            obs_vol_pct = bo.get('observe_vol_pct', 0)
-            obs_vol_text = f"{obs_vol_pct:.0f}%" if obs_vol_pct > 0 else "-"
-            obs_vol_color = "#e0503e" if obs_vol_pct >= 70 else "#1a9a5a" if obs_vol_pct <= 30 else "#666"
-
-            bo_time = bo['breakout_time'].strftime("%Y-%m-%d") if bo.get('breakout_time') else "-"
-            bo_price = f"{bo['breakout_price']:.2f}" if bo.get('breakout_price') else "-"
-            bo_vol_pct = bo.get('breakout_vol_pct', 0)
-            bo_vol_text = f"{bo_vol_pct:.0f}%" if bo_vol_pct > 0 else "-"
-            bo_vol_color = "#e0503e" if bo_vol_pct >= 70 else "#1a9a5a" if bo_vol_pct <= 30 else "#666"
-
-            bo_pct = bo.get("breakout_pct", 0)
-            if bo_pct > 0:
-                pct_text = f"+{bo_pct:.2f}%"
+            attempt_cnt = ub.get("attempt_count", len(attempts))
+            final_obs_time = ub['final_observe_time'].strftime("%Y-%m-%d") if ub.get('final_observe_time') else "-"
+            final_bo_time = ub['final_breakout_time'].strftime("%Y-%m-%d") if ub.get('final_breakout_time') else "-"
+            final_score = ub.get("final_score", 0)
+            final_pct = ub.get("final_breakout_pct", 0)
+            if final_pct > 0:
+                pct_text = f"+{final_pct:.2f}%"
                 pct_color = "#e0503e"
-            elif bo_pct < 0:
-                pct_text = f"{bo_pct:.2f}%"
+            elif final_pct < 0:
+                pct_text = f"{final_pct:.2f}%"
                 pct_color = "#1a9a5a"
             else:
                 pct_text = "-"
                 pct_color = "#999"
-            # 盘整标准度（仅标签，不参与评分）
+
+            # 盘整标准度
             standard_label = bx.get("standard_label", "中性")
             standard_score = bx.get("standard_score", 0)
-            standard_ratio = bx.get("standard_ratio", 0.0)
             if standard_score >= 2:
                 standard_color = "#e0503e"
             elif standard_score >= 1:
@@ -485,23 +478,69 @@ class ReportRenderer:
                 standard_color = "#666"
             else:
                 standard_color = "#1a9a5a"
-            standard_text = f"{standard_label}"
 
             breakout_rows.append(
                 f"<tr class='{status_cls}'><td>{i}</td>"
                 f"<td>{bx['start']:%Y-%m-%d} ~ {bx['end']:%Y-%m-%d}</td>"
-                f"<td style='color:{standard_color};font-weight:bold'>{standard_text}</td>"
+                f"<td style='color:{standard_color};font-weight:bold'>{standard_label}</td>"
+                f"<td style='font-weight:bold'>{attempt_cnt}次</td>"
                 f"<td style='color:{dir_color};font-weight:bold'>{dir_text}</td>"
-                f"<td>{obs_time}</td>"
-                f"<td style='color:{obs_vol_color};font-weight:bold'>{obs_vol_text}</td>"
-                f"<td>{bo_time}</td>"
-                f"<td style='color:{bo_vol_color};font-weight:bold'>{bo_vol_text}</td>"
-                f"<td>{bo_price}</td>"
-                f"<td style='font-weight:bold;color:{'#e0503e' if bo.get('score', 0) >= 5 else '#faad14' if bo.get('score', 0) >= 3 else '#999'}'>{bo.get('score', 0)}</td>"
+                f"<td>{final_obs_time}</td>"
+                f"<td>{final_bo_time}</td>"
+                f"<td style='font-weight:bold;color:{'#e0503e' if final_score >= 5 else '#faad14' if final_score >= 3 else '#999'}'>{final_score}</td>"
                 f"<td style='color:{pct_color};font-weight:bold'>{pct_text}</td>"
-                f"<td>{bo.get('breakout_end_time').strftime('%Y-%m-%d') if bo.get('breakout_end_time') else '-'}</td>"
-                f"<td style='color:{status_color};font-weight:bold'>{bo_status}</td>"
-                f"<td style='font-size:11px;color:#666'>{bo['detail']}</td></tr>")
+                f"<td style='color:{status_color};font-weight:bold'>{ub.get('final_status', '-')}</td>"
+                f"<td style='font-size:11px;color:#666'>{ub.get('final_detail', '')}</td></tr>")
+
+            # 突破尝试历史
+            for att in attempts:
+                att_dir = att.get("direction", "none")
+                if att_dir == "up":
+                    att_dir_text = "↑向上"
+                    att_dir_color = "#e0503e"
+                elif att_dir == "down":
+                    att_dir_text = "↓向下"
+                    att_dir_color = "#1a9a5a"
+                else:
+                    att_dir_text = "无"
+                    att_dir_color = "#999"
+
+                att_status = att.get("status", "-")
+                if att_status == "成功":
+                    att_status_color = "#e0503e" if att_dir == "up" else "#1a9a5a"
+                elif att_status == "失败":
+                    att_status_color = "#999"
+                else:
+                    att_status_color = "#faad14"
+
+                att_obs_time = att['observe_time'].strftime("%Y-%m-%d") if att.get('observe_time') else "-"
+                att_obs_price = f"{att['observe_price']:.2f}" if att.get('observe_price') else "-"
+                att_obs_vol = att.get("observe_vol_pct", 0)
+                att_obs_vol_text = f"{att_obs_vol:.0f}%" if att_obs_vol > 0 else "-"
+
+                if att.get("breakout_time"):
+                    att_result_time = att['breakout_time'].strftime("%Y-%m-%d")
+                    att_result_price = f"{att['breakout_price']:.2f}"
+                elif att.get("fail_time"):
+                    att_result_time = att['fail_time'].strftime("%Y-%m-%d")
+                    att_result_price = f"{att['fail_price']:.2f}"
+                else:
+                    att_result_time = "-"
+                    att_result_price = "-"
+
+                att_score = att.get("score", 0)
+                attempt_history_rows.append(
+                    f"<tr><td>{i}</td>"
+                    f"<td style='font-weight:bold'>第{att['attempt']}次</td>"
+                    f"<td>{att_obs_time}</td>"
+                    f"<td style='color:{att_dir_color}'>{att_dir_text}</td>"
+                    f"<td>{att_obs_price}</td>"
+                    f"<td>{att_obs_vol_text}</td>"
+                    f"<td style='color:{att_status_color};font-weight:bold'>{att_status}</td>"
+                    f"<td>{att_result_time}</td>"
+                    f"<td>{att_result_price}</td>"
+                    f"<td>{att_score}</td>"
+                    f"<td style='font-size:11px;color:#666'>{att.get('score_detail', '')}</td></tr>")
 
         # 评分历史明细
         score_history_rows = []
@@ -577,6 +616,7 @@ class ReportRenderer:
         html = html.replace("__BOXCNT__", str(len(boxes)))
         html = html.replace("__BOX_ROWS__", "".join(box_rows))
         html = html.replace("__BREAKOUT_ROWS__", "".join(breakout_rows))
+        html = html.replace("__ATTEMPT_HISTORY_ROWS__", "".join(attempt_history_rows))
         html = html.replace("__SCORE_HISTORY_ROWS__", "".join(score_history_rows))
         html = html.replace("__BREAKOUTCNT__", str(breakout_cnt))
         html = html.replace("__TREND_ROWS__", "".join(trend_rows))
