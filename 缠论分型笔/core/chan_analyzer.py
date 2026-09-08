@@ -54,18 +54,19 @@ class ChanAnalyzer:
         最小笔长度（去包含K线根数）
     """
 
-    def __init__(self, bars, symbol="", freq="", max_bi_num=None, min_bi_len=6):
+    def __init__(self, bars, symbol="", freq="", max_bi_num=None, min_bi_len=6, box_finder=None, start_dt=None):
         self.bars = bars
         self.symbol = symbol
         self.freq = freq
+        self.start_dt = start_dt
         if max_bi_num is None:
             max_bi_num = max(200, len(bars))
         # 缠论核心：内部自动做 K线合并 → 分型 → 笔 → 线段
         self.czsc = cb.CZSC(bars, max_bi_num=max_bi_num, min_bi_len=min_bi_len)
         # 笔端点分型（按 (dt, mark) 去重）
         self.fxs = self._extract_bi_fxs()
-        # 箱体识别器（独立封装，改盘整算法只动 box_finder.py）
-        self.box_finder = BoxFinder()
+        # 箱体识别器（策略模式，可传入不同算法，默认用全量BoxFinder）
+        self.box_finder = box_finder if box_finder is not None else BoxFinder()
         # 趋势识别器（独立封装，改趋势算法只动 trend_finder.py）
         self.trend_finder = TrendFinder()
         # 趋势分类器（独立封装，改分类逻辑只动 trend_classifier.py）
@@ -186,7 +187,7 @@ class ChanAnalyzer:
             bf.min_h_pct = min_h_pct
         if max_h_pct is not None:
             bf.max_h_pct = max_h_pct
-        boxes = bf.find(self.fxs, self.bars)
+        boxes = bf.find(self.fxs, self.bars, start_dt=self.start_dt)
         # 先找趋势（用于成交量分析中的"前一段趋势"判断）
         trends = self.find_trends()
         # 自动调用盘整质量分析（标准度+成交量，带去极值），改算法请编辑 core/box_quality_analyzer.py

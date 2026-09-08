@@ -54,7 +54,7 @@ def main():
         return
 
     # 创建分析器（内部自动做 K线合并→分型→笔→线段）
-    ana = ChanAnalyzer(bars, symbol=label, freq=freq)
+    ana = ChanAnalyzer(bars, symbol=label, freq=freq, start_dt=sdt)
     renderer = ReportRenderer(ana)
 
     # 终端输出

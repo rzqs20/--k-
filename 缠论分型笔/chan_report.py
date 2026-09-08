@@ -255,9 +255,9 @@ def load_bars(code, exchange, freq, sdt, edt, prewarm_bars=600):
     if not bars:
         raise RuntimeError(f"{code} 在 {sdt.date()}~{edt.date()} 区间内无 {freq} 数据")
 
-    # 预热：向前补足K线，保证缠论结构充分构建
-    if prewarm_bars > 0 and len(bars) < prewarm_bars:
-        pre = _load_prewarm(db_path, bars[0], freq, prewarm_bars - len(bars))
+    # 预热：总是在起始日期前加载prewarm_bars根K线，用于缠论结构构建和增量算法阈值计算
+    if prewarm_bars > 0:
+        pre = _load_prewarm(db_path, bars[0], freq, prewarm_bars)
         bars = pre + bars
         prewarm = len(pre)
     else:
