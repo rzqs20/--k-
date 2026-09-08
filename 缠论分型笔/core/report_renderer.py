@@ -256,7 +256,14 @@ class ReportRenderer:
                     trend_pct=3.0, trend_bars=20, box_params=None):
         """生成 HTML 图表报告，返回输出路径。"""
         ana = self.ana
-        bars = ana.bars
+        all_bars = ana.bars
+        # 过滤预热数据：只显示起始日期之后的K线
+        if sdt is not None:
+            all_dts = [b.dt for b in all_bars]
+            start_idx = bisect.bisect_left(all_dts, sdt)
+            bars = all_bars[start_idx:]
+        else:
+            bars = all_bars
         n = len(bars)
         dts = [b.dt for b in bars]
         opens = [b.open for b in bars]

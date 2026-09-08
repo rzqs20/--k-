@@ -67,6 +67,7 @@ RawBar = cb.RawBar
 
 from core.chan_analyzer import ChanAnalyzer
 from core.sell_signal_generator import SellSignalGenerator
+from core.box_finder import IncrementalBoxFinder
 
 # ==================== 策略参数 ====================
 params = {
@@ -190,7 +191,10 @@ def _analyze(sc, dn):
             )
             bars.append(bar)
 
-        ana = ChanAnalyzer(bars, symbol=sc, freq="日线")
+        # 增量箱体识别（滚动窗口阈值 + 确认锁定，箱体确认后不随后续数据变化；
+        # 与 chan_incremental.py 的 IncrementalBoxFinder 同一算法，window_size=20）
+        ana = ChanAnalyzer(bars, symbol=sc, freq="日线",
+                           box_finder=IncrementalBoxFinder(window_size=20))
         boxes = ana.find_boxes()
         if not boxes:
             return bars, [], ana.fxs

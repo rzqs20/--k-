@@ -224,7 +224,8 @@ def diagnose(mod, stocks, probe_dates):
                                            close=float(row['close']), high=float(row['high']),
                                            low=float(row['low']), vol=amount, amount=amount,
                                            id=i, freq="1d"))
-                ana = mod.ChanAnalyzer(bars, symbol=sc, freq="日线")
+                ana = mod.ChanAnalyzer(bars, symbol=sc, freq="日线",
+                                       box_finder=mod.IncrementalBoxFinder(window_size=20))
                 boxes = ana.find_boxes()
                 if not boxes:
                     print(f"  {d.date()}: 箱体 0 个")
