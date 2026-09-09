@@ -2747,7 +2747,3 @@
 00:21:47 [INFO] DuckDBManager 初始化完成，数据目录: D:\khData
 00:21:47 [INFO] 数据源初始化完成: DuckDB (D:\khData)
 00:21:47 [INFO] 数据源初始化完成: DuckDB (D:\khData)
-12:18:22 [INFO] DAP Debug Server stopped
-12:18:22 [INFO] DAP Debug Server stopped
-12:18:22 [INFO] DuckDBManager 所有连接已关闭
-12:18:22 [INFO] DuckDBManager 所有连接已关闭

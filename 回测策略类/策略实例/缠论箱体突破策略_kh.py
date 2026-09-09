@@ -25,7 +25,7 @@ import bisect
 from datetime import datetime, timedelta
 
 # ==================== 实时日志配置 ====================
-LOG_FILE = r"D:\量化k线\缠论分型笔\回测实时日志.txt"
+LOG_FILE = r"D:\量化k线\回测策略类\回测实时日志.txt"
 _file_handler = None
 
 def _setup_logging():

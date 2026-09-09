@@ -19,8 +19,8 @@ import types
 from datetime import datetime, timedelta
 
 CHAN_PATH = r"D:\量化k线\缠论分型笔"
-STRAT_PATH = os.path.join(CHAN_PATH, "strategies", "缠论箱体突破策略_kh.py")
-LOG_FILE = os.path.join(CHAN_PATH, "回测实时日志.txt")
+STRAT_PATH = r"D:\量化k线\回测策略类\策略实例\缠论箱体突破策略_kh.py"
+LOG_FILE = r"D:\量化k线\回测策略类\回测实时日志.txt"
 KHDATA = r"D:\khData"
 
 sys.path.insert(0, CHAN_PATH)
